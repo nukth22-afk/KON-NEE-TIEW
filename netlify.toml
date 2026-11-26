@@ -4,6 +4,7 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  NPM_FLAGS = "--legacy-peer-deps"
 
 # ============================================================================
 # หากต้องการใช้งานระบบหลังบ้าน (Admin CMS) + ฐานข้อมูล PostgreSQL บนโดเมน Netlify
