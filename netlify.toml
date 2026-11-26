@@ -1,0 +1,29 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# ============================================================================
+# หากต้องการใช้งานระบบหลังบ้าน (Admin CMS) + ฐานข้อมูล PostgreSQL บนโดเมน Netlify
+# 1. กด Publish แอปขึ้น Cloud Run (หรือ Deploy Backend บน Render/Railway)
+# 2. นำคอมเมนต์ (#) ออกจาก 2 บล็อกด้านล่าง แล้วแทนที่ YOUR_BACKEND_URL ด้วย URL ของ Backend
+# ============================================================================
+# [[redirects]]
+#   from = "/api/*"
+#   to = "https://YOUR_BACKEND_URL/api/:splat"
+#   status = 200
+#   force = true
+#
+# [[redirects]]
+#   from = "/uploads/*"
+#   to = "https://YOUR_BACKEND_URL/uploads/:splat"
+#   status = 200
+#   force = true
+
+# SPA Fallback สำหรับ React Router / History API (/destinations, /about, /article/*, /admin)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

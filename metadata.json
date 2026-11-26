@@ -1,0 +1,6 @@
+{
+  "name": "ฅนหนีเที่ยว",
+  "description": "บล็อกท่องเที่ยวส่วนตัว ฅนหนีเที่ยว — บันทึกการเดินทาง เรื่องราวระหว่างทาง และสถานที่สวย ๆ ทั่วประเทศไทย",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
