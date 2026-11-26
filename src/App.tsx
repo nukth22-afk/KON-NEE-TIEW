@@ -55,8 +55,19 @@ function loadSavedTripIds(): number[] {
   }
 }
 
+const BASE_PREFIX = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+
+function withBasePath(urlPath: string): string {
+  const normalized = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
+  if (!BASE_PREFIX) return normalized;
+  return normalized === '/' ? `${BASE_PREFIX}/` : `${BASE_PREFIX}${normalized}`;
+}
+
 function parseLocationRoute(): RouteView {
-  const pathname = window.location.pathname;
+  let pathname = window.location.pathname;
+  if (BASE_PREFIX && pathname.startsWith(BASE_PREFIX)) {
+    pathname = pathname.slice(BASE_PREFIX.length) || '/';
+  }
   if (pathname.startsWith('/admin')) {
     return { name: 'admin' };
   }
@@ -170,8 +181,9 @@ export default function App() {
 
   const navigate = useCallback((nextRoute: RouteView, urlPath: string) => {
     setRoute(nextRoute);
-    if (window.location.pathname !== urlPath) {
-      window.history.pushState({}, '', urlPath);
+    const targetPath = withBasePath(urlPath);
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({}, '', targetPath);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
@@ -284,7 +296,7 @@ export default function App() {
   const handleScrollToSection = (sectionId: string) => {
     if (route.name !== 'home') {
       setRoute({ name: 'home' });
-      window.history.pushState({}, '', '/');
+      window.history.pushState({}, '', withBasePath('/'));
       window.setTimeout(() => {
         document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth' });
       }, 90);

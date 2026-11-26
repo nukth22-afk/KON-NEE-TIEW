@@ -40,9 +40,15 @@ export function SafeImage({
     );
   }
 
+  const basePrefix = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+  const resolvedSrc =
+    basePrefix && src.startsWith('/src/assets/images/')
+      ? `${basePrefix}${src}`
+      : src;
+
   return (
     <img
-      src={src}
+      src={resolvedSrc}
       alt={alt}
       loading={loading}
       referrerPolicy="no-referrer"
