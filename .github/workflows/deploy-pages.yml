@@ -32,6 +32,7 @@ jobs:
       - name: Build static site for GitHub Pages
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
+          VITE_API_BASE_URL: https://konneetiew.ai.studio
         run: npm run build
 
       - name: Add SPA 404 fallback

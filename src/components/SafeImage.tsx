@@ -41,10 +41,16 @@ export function SafeImage({
   }
 
   const basePrefix = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-  const resolvedSrc =
-    basePrefix && src.startsWith('/src/assets/images/')
-      ? `${basePrefix}${src}`
-      : src;
+  const apiBase = (
+    (import.meta.env.VITE_API_BASE_URL as string | undefined) || ''
+  ).replace(/\/+$/, '');
+
+  let resolvedSrc = src;
+  if (apiBase && src.startsWith('/uploads/')) {
+    resolvedSrc = `${apiBase}${src}`;
+  } else if (basePrefix && src.startsWith('/src/assets/images/')) {
+    resolvedSrc = `${basePrefix}${src}`;
+  }
 
   return (
     <img

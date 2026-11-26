@@ -3,6 +3,7 @@
   "appId": "1:1029872177117:web:b82de895c119b6879ef034",
   "apiKey": "AIzaSyBMXRXpErHXg1WhFJP9mkYOkfsh2ojfTv0",
   "authDomain": "ecstatic-parser-8kpm1.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-5cb5a3cc-1348-4863-9015-8f672d249145",
   "storageBucket": "ecstatic-parser-8kpm1.firebasestorage.app",
   "messagingSenderId": "1029872177117",
   "measurementId": "",
