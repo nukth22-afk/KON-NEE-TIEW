@@ -1,16 +1,21 @@
 import {
   Check,
   CheckCircle2,
+  Cloud,
   Compass,
   Copy,
   ExternalLink,
   Eye,
+  EyeOff,
   FileEdit,
   FileText,
+  Heart,
   Images,
   LayoutDashboard,
+  Link2,
   LogOut,
   Menu,
+  MessageSquare,
   Pencil,
   Plus,
   Search,
@@ -22,19 +27,25 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  deleteAdminCommentApi,
   deleteArticle,
   deleteMediaAsset,
   fetchAdminArticles,
-  fetchAdminMedia,
+  fetchAdminComments,
+  fetchAdminMediaInfo,
+  registerExternalMediaUrl,
   toggleArticleFeatured,
   updateArticle,
+  updateCommentApproval,
   uploadImages,
+  type MediaStorageMode,
 } from '../lib/api';
-import { formatFileSize, formatThaiDate } from '../lib/format';
+import { formatFileSize, formatThaiDate, isSafeExternalUrl } from '../lib/format';
 import {
   THAI_REGIONS,
   type AdminUser,
   type Article,
+  type ArticleComment,
   type MediaAsset,
   type SiteSettings,
   type ThaiRegion,
@@ -45,6 +56,7 @@ import { WebsiteSettingsPanel } from './WebsiteSettingsPanel';
 type AdminNavSection =
   | 'dashboard'
   | 'articles'
+  | 'comments'
   | 'regions'
   | 'media'
   | 'settings';
@@ -83,6 +95,16 @@ export function AdminDashboard({
 
   const [articles, setArticles] = useState<Article[]>([]);
   const [media, setMedia] = useState<MediaAsset[]>([]);
+  const [mediaStorageMode, setMediaStorageMode] = useState<MediaStorageMode>('database');
+  const [externalUrlInput, setExternalUrlInput] = useState('');
+  const [externalLabelInput, setExternalLabelInput] = useState('');
+  const [savingExternalUrl, setSavingExternalUrl] = useState(false);
+  const [externalUrlError, setExternalUrlError] = useState('');
+  const [comments, setComments] = useState<ArticleComment[]>([]);
+  const [commentFilter, setCommentFilter] = useState<'all' | 'pending' | 'approved'>('all');
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [busyCommentId, setBusyCommentId] = useState<number | null>(null);
+  const [deleteCommentTarget, setDeleteCommentTarget] = useState<ArticleComment | null>(null);
   const [loading, setLoading] = useState(true);
   const [mediaLoading, setMediaLoading] = useState(false);
   const [uploadingMedia, setUploadingMedia] = useState(false);
@@ -119,8 +141,9 @@ export function AdminDashboard({
     setMediaLoading(true);
     try {
       const token = await getToken();
-      const list = await fetchAdminMedia(token);
-      setMedia(list);
+      const info = await fetchAdminMediaInfo(token);
+      setMedia(info.media);
+      setMediaStorageMode(info.storageMode);
     } catch {
       setMedia([]);
     } finally {
@@ -128,10 +151,24 @@ export function AdminDashboard({
     }
   }, [getToken]);
 
+  const loadComments = useCallback(async () => {
+    setCommentsLoading(true);
+    try {
+      const token = await getToken();
+      const list = await fetchAdminComments(token);
+      setComments(list);
+    } catch {
+      setComments([]);
+    } finally {
+      setCommentsLoading(false);
+    }
+  }, [getToken]);
+
   useEffect(() => {
     loadArticles();
     loadMedia();
-  }, [loadArticles, loadMedia]);
+    loadComments();
+  }, [loadArticles, loadMedia, loadComments]);
 
   const filteredArticles = articles.filter((item) => {
     if (statusFilter !== 'all' && item.status !== statusFilter) return false;
@@ -172,6 +209,7 @@ export function AdminDashboard({
         duration: article.duration,
         budget_estimate: article.budget_estimate,
         highlights: article.highlights,
+        google_maps_url: article.google_maps_url,
         is_featured: article.is_featured,
         excerpt: article.excerpt,
         cover_image: article.cover_image,
@@ -266,6 +304,76 @@ export function AdminDashboard({
     }
   };
 
+  const handleRegisterExternalMedia = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedUrl = externalUrlInput.trim();
+    if (!trimmedUrl || !isSafeExternalUrl(trimmedUrl)) {
+      setExternalUrlError('กรุณาวางลิงก์รูปภาพที่ขึ้นต้นด้วย https:// หรือ http://');
+      return;
+    }
+    setSavingExternalUrl(true);
+    setExternalUrlError('');
+    try {
+      const token = await getToken();
+      const created = await registerExternalMediaUrl(
+        token,
+        trimmedUrl,
+        externalLabelInput.trim() || undefined,
+      );
+      setMedia((prev) => [created, ...prev]);
+      setExternalUrlInput('');
+      setExternalLabelInput('');
+    } catch (err) {
+      setExternalUrlError(
+        err instanceof Error ? err.message : 'ไม่สามารถบันทึกลิงก์รูปภาพได้',
+      );
+    } finally {
+      setSavingExternalUrl(false);
+    }
+  };
+
+  const handleToggleCommentApproval = async (comment: ArticleComment) => {
+    setBusyCommentId(comment.id);
+    setError('');
+    try {
+      const token = await getToken();
+      const nextApproved = !comment.is_approved;
+      await updateCommentApproval(token, comment.id, nextApproved);
+      setComments((prev) =>
+        prev.map((c) =>
+          c.id === comment.id ? { ...c, is_approved: nextApproved } : c,
+        ),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'ไม่สามารถอัปเดตสถานะความคิดเห็นได้');
+    } finally {
+      setBusyCommentId(null);
+    }
+  };
+
+  const handleConfirmDeleteComment = async () => {
+    if (!deleteCommentTarget) return;
+    setBusyCommentId(deleteCommentTarget.id);
+    setError('');
+    try {
+      const token = await getToken();
+      await deleteAdminCommentApi(token, deleteCommentTarget.id);
+      setComments((prev) => prev.filter((c) => c.id !== deleteCommentTarget.id));
+      setDeleteCommentTarget(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'ไม่สามารถลบความคิดเห็นได้');
+    } finally {
+      setBusyCommentId(null);
+    }
+  };
+
+  const pendingCommentsCount = comments.filter((c) => !c.is_approved).length;
+  const filteredComments = comments.filter((c) => {
+    if (commentFilter === 'pending') return !c.is_approved;
+    if (commentFilter === 'approved') return c.is_approved;
+    return true;
+  });
+
   const selectSection = (next: AdminNavSection) => {
     setSection(next);
     setMobileSidebarOpen(false);
@@ -276,9 +384,17 @@ export function AdminDashboard({
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: number;
+    highlightBadge?: boolean;
   }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'articles', label: 'จัดการบทความ', icon: FileText, badge: articles.length },
+    {
+      id: 'comments',
+      label: 'จัดการความคิดเห็น',
+      icon: MessageSquare,
+      badge: pendingCommentsCount > 0 ? pendingCommentsCount : comments.length,
+      highlightBadge: pendingCommentsCount > 0,
+    },
     { id: 'regions', label: 'จัดการหมวดหมู่/ภูมิภาค', icon: Compass },
     { id: 'media', label: 'คลังรูปภาพ', icon: Images, badge: media.length },
     { id: 'settings', label: 'ตั้งค่าเว็บไซต์', icon: Settings },
@@ -333,7 +449,13 @@ export function AdminDashboard({
                 <span className="truncate">{item.label}</span>
               </span>
               {typeof item.badge === 'number' && (
-                <span className="text-xs tabular-nums text-[#7D827D]">
+                <span
+                  className={`text-xs tabular-nums ${
+                    item.highlightBadge
+                      ? 'px-2 py-0.5 rounded-full bg-[#E94C8A] text-white font-semibold'
+                      : 'text-[#7D827D]'
+                  }`}
+                >
                   {item.badge}
                 </span>
               )}
@@ -741,6 +863,13 @@ export function AdminDashboard({
                                 <Eye className="w-3.5 h-3.5" />
                                 <span>{article.views.toLocaleString('th-TH')} ครั้ง</span>
                               </span>
+                              <span aria-hidden="true" className="text-[#D5D1C7]">
+                                |
+                              </span>
+                              <span className="inline-flex items-center gap-1 text-[#5C615C] tabular-nums">
+                                <Heart className="w-3.5 h-3.5 text-[#D9437E]" />
+                                <span>{(article.likes_count || 0).toLocaleString('th-TH')}</span>
+                              </span>
                             </div>
                           </div>
 
@@ -795,6 +924,152 @@ export function AdminDashboard({
                               type="button"
                               disabled={isBusy}
                               onClick={() => setDeleteTarget(article)}
+                              className="inline-flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-medium text-[#B82860] hover:bg-[#FEF4F8] cursor-pointer whitespace-nowrap"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>ลบ</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* SECTION: COMMENTS MODERATION */}
+          {section === 'comments' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-5 border-b border-[#E5E2DA]">
+                <div>
+                  <h1 className="font-editorial text-2xl sm:text-3xl font-semibold text-[#252525]">
+                    จัดการความคิดเห็นจากผู้อ่าน
+                  </h1>
+                  <p className="text-xs sm:text-sm text-[#5C615C] mt-1">
+                    ตรวจสอบ อนุมัติให้แสดงผล ซ่อน หรือลบข้อความที่ผู้อ่านส่งเข้ามาในแต่ละบทความ
+                  </p>
+                </div>
+
+                <div className="inline-flex items-center p-1 rounded-xl bg-[#EFECE4] border border-[#E5E2DA] self-start">
+                  {(
+                    [
+                      { id: 'all', label: `ทั้งหมด (${comments.length})` },
+                      { id: 'pending', label: `รอตรวจสอบ (${pendingCommentsCount})` },
+                      {
+                        id: 'approved',
+                        label: `อนุมัติแล้ว (${comments.length - pendingCommentsCount})`,
+                      },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setCommentFilter(tab.id)}
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                        commentFilter === tab.id
+                          ? 'bg-white text-[#252525] shadow-xs'
+                          : 'text-[#5C615C] hover:text-[#252525]'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-[#E5E2DA] overflow-hidden">
+                {commentsLoading ? (
+                  <div className="p-12 text-center text-sm text-[#5C615C]">
+                    กำลังโหลดความคิดเห็น...
+                  </div>
+                ) : filteredComments.length === 0 ? (
+                  <div className="p-14 text-center">
+                    <MessageSquare
+                      className="w-8 h-8 mx-auto text-[#8D928B] mb-3"
+                      strokeWidth={1.5}
+                    />
+                    <p className="font-editorial text-lg font-medium text-[#252525]">
+                      ยังไม่มีความคิดเห็นในหมวดนี้
+                    </p>
+                    <p className="mt-1 text-sm text-[#5C615C]">
+                      เมื่อผู้อ่านฝากข้อความหรือถามข้อมูลเส้นทางใต้บทความ รายการจะปรากฏที่นี่เพื่อให้คุณตรวจสอบก่อนแสดงผล
+                    </p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-[#EFECE4]">
+                    {filteredComments.map((item) => {
+                      const isBusy = busyCommentId === item.id;
+                      return (
+                        <div
+                          key={item.id}
+                          className="p-5 flex flex-col lg:flex-row lg:items-start justify-between gap-4 hover:bg-[#FAFAF7]/80 transition-colors"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              <span className="font-semibold text-[#252525]">
+                                {item.author_name}
+                              </span>
+                              <span aria-hidden="true" className="text-[#C9C4B8]">
+                                ·
+                              </span>
+                              <span className="text-[#7D827D]">
+                                {formatThaiDate(item.created_at)}
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                                  item.is_approved
+                                    ? 'bg-[#DDE8DD]/75 text-[#244B3A]'
+                                    : 'bg-[#FEF4F8] text-[#B82860]'
+                                }`}
+                              >
+                                {item.is_approved ? 'อนุมัติแล้ว' : 'รอตรวจสอบ'}
+                              </span>
+                            </div>
+
+                            {item.article_title && (
+                              <p className="mt-1 text-xs text-[#5C615C] truncate">
+                                บทความ:{' '}
+                                <span className="font-medium text-[#244B3A]">
+                                  {item.article_title}
+                                </span>
+                              </p>
+                            )}
+
+                            <p className="mt-2.5 text-sm text-[#2D312D] leading-relaxed whitespace-pre-line">
+                              {item.message}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleToggleCommentApproval(item)}
+                              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap ${
+                                item.is_approved
+                                  ? 'border border-[#DCD7CB] bg-white hover:bg-[#F4F2EC] text-[#4B524B]'
+                                  : 'bg-[#244B3A] hover:bg-[#1B3A2C] text-white'
+                              }`}
+                            >
+                              {item.is_approved ? (
+                                <>
+                                  <EyeOff className="w-3.5 h-3.5" />
+                                  <span>ซ่อน</span>
+                                </>
+                              ) : (
+                                <>
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  <span>อนุมัติแสดงผล</span>
+                                </>
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => setDeleteCommentTarget(item)}
                               className="inline-flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-medium text-[#B82860] hover:bg-[#FEF4F8] cursor-pointer whitespace-nowrap"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -925,6 +1200,76 @@ export function AdminDashboard({
                 </div>
               </div>
 
+              {/* Storage Mode Notice + External Image URL Form */}
+              <div className="mt-5 space-y-4">
+                <div
+                  className={`px-4 py-3 rounded-xl border text-xs leading-relaxed flex items-start gap-2.5 ${
+                    mediaStorageMode === 'cloudinary'
+                      ? 'bg-[#DDE8DD]/55 border-[#B8D1B8] text-[#244B3A]'
+                      : 'bg-[#FAFAF7] border-[#E5E2DA] text-[#5C615C]'
+                  }`}
+                >
+                  <Cloud className="w-4 h-4 shrink-0 mt-0.5 text-[#244B3A]" />
+                  <div>
+                    {mediaStorageMode === 'cloudinary' ? (
+                      <p>
+                        <span className="font-semibold text-[#244B3A]">
+                          เชื่อมต่อ Cloudinary CDN แล้ว
+                        </span>{' '}
+                        — รูปภาพที่อัปโหลดจากเครื่องจะถูกส่งไปเก็บบน Cloudinary โดยอัตโนมัติ (ไม่ใช้พื้นที่เก็บรูปในฐานข้อมูล Cloud SQL)
+                      </p>
+                    ) : (
+                      <p>
+                        <span className="font-semibold text-[#252525]">
+                          พื้นที่เก็บรูปภาพปัจจุบัน: ฐานข้อมูล Cloud SQL
+                        </span>{' '}
+                        — สามารถประหยัดพื้นที่ฐานข้อมูลได้ทันทีโดยวางลิงก์รูปภาพจาก Cloudinary / ImgBB ด้านล่าง หรือเชื่อมต่อตัวแปร Cloudinary บนเซิร์ฟเวอร์เพื่อให้ระบบอัปโหลดอัตโนมัติ
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <form
+                  onSubmit={handleRegisterExternalMedia}
+                  className="p-4 rounded-xl bg-[#FAFAF7] border border-[#E5E2DA] space-y-3"
+                >
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-[#252525]">
+                    <Link2 className="w-3.5 h-3.5 text-[#244B3A]" />
+                    <span>เพิ่มลิงก์รูปภาพภายนอกเข้าคลัง (Cloudinary / ImgBB / URL)</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5">
+                    <input
+                      type="url"
+                      value={externalUrlInput}
+                      onChange={(e) => {
+                        setExternalUrlInput(e.target.value);
+                        if (externalUrlError) setExternalUrlError('');
+                      }}
+                      placeholder="วางลิงก์รูปภาพ https://res.cloudinary.com/..."
+                      className="md:col-span-6 px-3.5 py-2 rounded-xl bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                    />
+                    <input
+                      type="text"
+                      value={externalLabelInput}
+                      onChange={(e) => setExternalLabelInput(e.target.value)}
+                      placeholder="ชื่อเรียกภาพ (ไม่บังคับ เช่น ผาเก็บตะวัน ยามเย็น)"
+                      className="md:col-span-4 px-3.5 py-2 rounded-xl bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                    />
+                    <button
+                      type="submit"
+                      disabled={savingExternalUrl}
+                      className="md:col-span-2 inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#DDE8DD]/85 hover:bg-[#DDE8DD] disabled:opacity-60 text-xs font-medium text-[#244B3A] cursor-pointer whitespace-nowrap"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>{savingExternalUrl ? 'กำลังบันทึก...' : 'เพิ่มเข้าคลัง'}</span>
+                    </button>
+                  </div>
+                  {externalUrlError && (
+                    <p className="text-xs text-[#B82860]">{externalUrlError}</p>
+                  )}
+                </form>
+              </div>
+
               {mediaLoading ? (
                 <div className="py-14 text-center text-sm text-[#5C615C]">
                   กำลังโหลดคลังรูปภาพ...
@@ -936,10 +1281,10 @@ export function AdminDashboard({
                     strokeWidth={1.5}
                   />
                   <p className="font-editorial text-lg font-medium text-[#252525]">
-                    ยังไม่มีรูปภาพที่อัปโหลดจากเครื่อง
+                    ยังไม่มีรูปภาพในคลังสื่อ
                   </p>
                   <p className="mt-1 text-sm text-[#5C615C]">
-                    อัปโหลดรูปภาพที่นี่หรือในหน้าเขียนบทความ รูปภาพทั้งหมดจะถูกเก็บไว้ให้เลือกใช้ซ้ำได้ตลอดเวลา
+                    อัปโหลดรูปภาพหรือวางลิงก์รูปภาพภายนอกด้านบน เพื่อเก็บไว้เลือกใช้ซ้ำในบทความได้ตลอดเวลา
                   </p>
                 </div>
               ) : (
@@ -965,8 +1310,10 @@ export function AdminDashboard({
                             {asset.original_name}
                           </p>
                           <p className="mt-0.5 text-[11px] text-[#7D827D] tabular-nums">
-                            {formatFileSize(asset.size)} ·{' '}
-                            {formatThaiDate(asset.created_at)}
+                            {asset.size > 0
+                              ? formatFileSize(asset.size)
+                              : 'ลิงก์ภายนอก'}{' '}
+                            · {formatThaiDate(asset.created_at)}
                           </p>
                         </div>
                         <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#EAE6DC]">
@@ -1086,6 +1433,45 @@ export function AdminDashboard({
                 className="px-4 py-2 rounded-lg bg-[#E94C8A] hover:bg-[#C93B74] text-white text-sm font-medium cursor-pointer"
               >
                 ยืนยันการลบไฟล์
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Comment Confirmation Modal */}
+      {deleteCommentTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-comment-title"
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-5"
+        >
+          <div className="w-full max-w-md bg-white rounded-2xl border border-[#E5E2DA] p-6 shadow-xl">
+            <h2
+              id="delete-comment-title"
+              className="font-editorial text-xl font-semibold text-[#252525]"
+            >
+              ยืนยันการลบความคิดเห็น
+            </h2>
+            <p className="mt-2 text-sm text-[#5C615C] leading-relaxed">
+              ต้องการลบความคิดเห็นของ “{deleteCommentTarget.author_name}” ออกจากระบบอย่างถาวรใช่หรือไม่?
+            </p>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setDeleteCommentTarget(null)}
+                className="px-4 py-2 rounded-lg border border-[#DCD7CB] text-sm font-medium text-[#252525] hover:bg-[#F4F2EC] cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                disabled={busyCommentId === deleteCommentTarget.id}
+                onClick={handleConfirmDeleteComment}
+                className="px-4 py-2 rounded-lg bg-[#E94C8A] hover:bg-[#C93B74] text-white text-sm font-medium cursor-pointer disabled:opacity-60"
+              >
+                {busyCommentId === deleteCommentTarget.id ? 'กำลังลบ...' : 'ยืนยันการลบ'}
               </button>
             </div>
           </div>

@@ -4,10 +4,13 @@ import {
   THAI_REGIONS,
   TRAVEL_STYLES,
   type Article,
+  type ArticleComment,
   type ArticleInput,
+  type ArticleSummaryNav,
   type GalleryImage,
   type MediaAsset,
   type PhotoPostcard,
+  type ProvinceFootprint,
   type SiteOverview,
   type SiteSettings,
   type SiteSettingsInput,
@@ -15,12 +18,18 @@ import {
   type TravelStyle,
 } from '../types/blog.ts';
 import { db } from './index.ts';
-import { articleImages, articles, media, siteSettings } from './schema.ts';
+import {
+  articleComments,
+  articleImages,
+  articles,
+  media,
+  siteSettings,
+} from './schema.ts';
 
 type ArticleRow = typeof articles.$inferSelect;
 type ArticleImageRow = typeof articleImages.$inferSelect;
 type SiteSettingsRow = typeof siteSettings.$inferSelect;
-type MediaRow = typeof media.$inferSelect;
+type MediaMetaRow = Omit<typeof media.$inferSelect, 'contentBase64'>;
 
 function mapArticle(row: ArticleRow, images: ArticleImageRow[]): Article {
   const sorted = [...images].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
@@ -44,8 +53,10 @@ function mapArticle(row: ArticleRow, images: ArticleImageRow[]): Article {
     duration: row.duration,
     budget_estimate: row.budgetEstimate,
     highlights: row.highlights,
+    google_maps_url: row.googleMapsUrl,
     is_featured: row.isFeatured,
     views: row.views,
+    likes_count: row.likesCount,
     excerpt: row.excerpt,
     cover_image: row.coverImage,
     content: row.content,
@@ -77,6 +88,7 @@ function mapSettings(row: SiteSettingsRow): SiteSettings {
     intro_description: row.introDescription,
     about_image: row.aboutImage,
     about_story: row.aboutStory,
+    camera_gear: row.cameraGear,
     contact_email: row.contactEmail,
     facebook_url: row.facebookUrl,
     instagram_url: row.instagramUrl,
@@ -85,7 +97,7 @@ function mapSettings(row: SiteSettingsRow): SiteSettings {
   };
 }
 
-function mapMedia(row: MediaRow): MediaAsset {
+function mapMedia(row: MediaMetaRow): MediaAsset {
   return {
     id: row.id,
     filename: row.filename,
@@ -180,6 +192,7 @@ export async function getSiteSettings(): Promise<SiteSettings> {
         introDescription: DEFAULT_SITE_SETTINGS.intro_description,
         aboutImage: DEFAULT_SITE_SETTINGS.about_image,
         aboutStory: DEFAULT_SITE_SETTINGS.about_story,
+        cameraGear: DEFAULT_SITE_SETTINGS.camera_gear,
         contactEmail: DEFAULT_SITE_SETTINGS.contact_email,
         facebookUrl: DEFAULT_SITE_SETTINGS.facebook_url,
         instagramUrl: DEFAULT_SITE_SETTINGS.instagram_url,
@@ -212,6 +225,7 @@ export async function updateSiteSettings(input: SiteSettingsInput): Promise<Site
         introDescription: input.intro_description,
         aboutImage: input.about_image,
         aboutStory: input.about_story,
+        cameraGear: input.camera_gear,
         contactEmail: input.contact_email,
         facebookUrl: input.facebook_url,
         instagramUrl: input.instagram_url,
@@ -301,6 +315,9 @@ export async function listPublishedArticles(filters: {
 export async function getPublishedArticleBySlugOrId(idOrSlug: string): Promise<{
   article: Article;
   related: Article[];
+  prevArticle: ArticleSummaryNav | null;
+  nextArticle: ArticleSummaryNav | null;
+  comments: ArticleComment[];
 } | null> {
   try {
     const isNumeric = /^\d+$/.test(idOrSlug);
@@ -319,18 +336,47 @@ export async function getPublishedArticleBySlugOrId(idOrSlug: string): Promise<{
 
     const [article] = await attachImages([incremented ?? rows[0]]);
 
-    const relatedRows = await db
-      .select()
-      .from(articles)
-      .where(and(eq(articles.status, 'published'), ne(articles.id, article.id)))
-      .orderBy(
-        sql`CASE WHEN ${articles.region} = ${article.region} THEN 0 WHEN ${articles.travelStyle} = ${article.travel_style} THEN 1 ELSE 2 END`,
-        desc(articles.publishedAt),
-      )
-      .limit(3);
+    const [relatedRows, navRows, approvedComments] = await Promise.all([
+      db
+        .select()
+        .from(articles)
+        .where(and(eq(articles.status, 'published'), ne(articles.id, article.id)))
+        .orderBy(
+          sql`CASE WHEN ${articles.region} = ${article.region} THEN 0 WHEN ${articles.travelStyle} = ${article.travel_style} THEN 1 ELSE 2 END`,
+          desc(articles.publishedAt),
+        )
+        .limit(3),
+      db
+        .select({
+          id: articles.id,
+          slug: articles.slug,
+          title: articles.title,
+          place_name: articles.locationName,
+          province: articles.province,
+          cover_image: articles.coverImage,
+        })
+        .from(articles)
+        .where(eq(articles.status, 'published'))
+        .orderBy(desc(articles.publishedAt), desc(articles.id)),
+      listApprovedComments(article.id),
+    ]);
+
+    const currentIndex = navRows.findIndex((item) => item.id === article.id);
+    const nextArticle: ArticleSummaryNav | null =
+      currentIndex > 0 ? navRows[currentIndex - 1] : null;
+    const prevArticle: ArticleSummaryNav | null =
+      currentIndex >= 0 && currentIndex < navRows.length - 1
+        ? navRows[currentIndex + 1]
+        : null;
 
     const related = await attachImages(relatedRows);
-    return { article, related };
+    return {
+      article,
+      related,
+      prevArticle,
+      nextArticle,
+      comments: approvedComments,
+    };
   } catch (error) {
     console.error('Failed to load article detail:', error);
     throw new Error('ไม่สามารถโหลดรายละเอียดบทความได้', { cause: error });
@@ -342,6 +388,7 @@ export async function getSiteOverview(): Promise<SiteOverview> {
     const { articles: allPublished } = await listPublishedArticles({ limit: 200 });
 
     const provincesSet = new Set<string>();
+    const provinceMap = new Map<string, ProvinceFootprint>();
     const regionCounts = THAI_REGIONS.reduce(
       (acc, r) => {
         acc[r] = 0;
@@ -351,7 +398,22 @@ export async function getSiteOverview(): Promise<SiteOverview> {
     );
 
     for (const a of allPublished) {
-      if (a.province.trim()) provincesSet.add(a.province.trim());
+      const prov = a.province.trim();
+      if (prov) {
+        provincesSet.add(prov);
+        const existing = provinceMap.get(prov);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          provinceMap.set(prov, {
+            province: prov,
+            region: a.region,
+            count: 1,
+            latestSlug: a.slug,
+            latestPlace: a.place_name,
+          });
+        }
+      }
       regionCounts[a.region] = (regionCounts[a.region] || 0) + 1;
     }
 
@@ -390,6 +452,10 @@ export async function getSiteOverview(): Promise<SiteOverview> {
       if (postcards.length >= 6) break;
     }
 
+    const provinceFootprints = Array.from(provinceMap.values()).sort(
+      (a, b) => b.count - a.count || a.province.localeCompare(b.province, 'th'),
+    );
+
     return {
       stats: {
         totalArticles: allPublished.length,
@@ -399,12 +465,167 @@ export async function getSiteOverview(): Promise<SiteOverview> {
       },
       regionCounts,
       provinces: Array.from(provincesSet).sort((a, b) => a.localeCompare(b, 'th')),
+      provinceFootprints,
       featuredArticle,
       postcards: postcards.slice(0, 6),
     };
   } catch (error) {
     console.error('Failed to compute site overview:', error);
     throw new Error('ไม่สามารถโหลดภาพรวมเว็บไซต์ได้', { cause: error });
+  }
+}
+
+// ---------- Public Engagement (Likes & Comments) ----------
+
+export async function incrementArticleLike(id: number): Promise<number | null> {
+  try {
+    const [updated] = await db
+      .update(articles)
+      .set({ likesCount: sql`${articles.likesCount} + 1` })
+      .where(and(eq(articles.id, id), eq(articles.status, 'published')))
+      .returning({ likesCount: articles.likesCount });
+    return updated ? updated.likesCount : null;
+  } catch (error) {
+    console.error('Failed to increment article like:', error);
+    throw new Error('ไม่สามารถบันทึกการถูกใจได้', { cause: error });
+  }
+}
+
+export async function listApprovedComments(articleId: number): Promise<ArticleComment[]> {
+  try {
+    const rows = await db
+      .select()
+      .from(articleComments)
+      .where(
+        and(
+          eq(articleComments.articleId, articleId),
+          eq(articleComments.isApproved, true),
+        ),
+      )
+      .orderBy(desc(articleComments.createdAt), desc(articleComments.id))
+      .limit(100);
+
+    return rows.map((row) => ({
+      id: row.id,
+      article_id: row.articleId,
+      author_name: row.authorName,
+      message: row.message,
+      is_approved: row.isApproved,
+      created_at: row.createdAt.toISOString(),
+    }));
+  } catch (error) {
+    console.error('Failed to list approved comments:', error);
+    return [];
+  }
+}
+
+export async function createArticleComment(
+  articleId: number,
+  authorName: string,
+  message: string,
+): Promise<ArticleComment | null> {
+  try {
+    const existing = await db
+      .select({ id: articles.id })
+      .from(articles)
+      .where(and(eq(articles.id, articleId), eq(articles.status, 'published')))
+      .limit(1);
+    if (!existing[0]) return null;
+
+    const [created] = await db
+      .insert(articleComments)
+      .values({
+        articleId,
+        authorName,
+        message,
+        isApproved: false,
+      })
+      .returning();
+
+    return {
+      id: created.id,
+      article_id: created.articleId,
+      author_name: created.authorName,
+      message: created.message,
+      is_approved: created.isApproved,
+      created_at: created.createdAt.toISOString(),
+    };
+  } catch (error) {
+    console.error('Failed to create article comment:', error);
+    throw new Error('ไม่สามารถส่งความคิดเห็นได้', { cause: error });
+  }
+}
+
+export async function listAllAdminComments(): Promise<ArticleComment[]> {
+  try {
+    const rows = await db
+      .select({
+        id: articleComments.id,
+        articleId: articleComments.articleId,
+        articleTitle: articles.title,
+        articleSlug: articles.slug,
+        authorName: articleComments.authorName,
+        message: articleComments.message,
+        isApproved: articleComments.isApproved,
+        createdAt: articleComments.createdAt,
+      })
+      .from(articleComments)
+      .innerJoin(articles, eq(articleComments.articleId, articles.id))
+      .orderBy(asc(articleComments.isApproved), desc(articleComments.createdAt))
+      .limit(200);
+
+    return rows.map((row) => ({
+      id: row.id,
+      article_id: row.articleId,
+      article_title: row.articleTitle,
+      article_slug: row.articleSlug,
+      author_name: row.authorName,
+      message: row.message,
+      is_approved: row.isApproved,
+      created_at: row.createdAt.toISOString(),
+    }));
+  } catch (error) {
+    console.error('Failed to list admin comments:', error);
+    throw new Error('ไม่สามารถโหลดรายการความคิดเห็นได้', { cause: error });
+  }
+}
+
+export async function setCommentApproval(
+  id: number,
+  isApproved: boolean,
+): Promise<ArticleComment | null> {
+  try {
+    const [updated] = await db
+      .update(articleComments)
+      .set({ isApproved })
+      .where(eq(articleComments.id, id))
+      .returning();
+    if (!updated) return null;
+
+    return {
+      id: updated.id,
+      article_id: updated.articleId,
+      author_name: updated.authorName,
+      message: updated.message,
+      is_approved: updated.isApproved,
+      created_at: updated.createdAt.toISOString(),
+    };
+  } catch (error) {
+    console.error('Failed to update comment approval:', error);
+    throw new Error('ไม่สามารถอัปเดตสถานะความคิดเห็นได้', { cause: error });
+  }
+}
+
+export async function deleteAdminComment(id: number): Promise<boolean> {
+  try {
+    const deleted = await db
+      .delete(articleComments)
+      .where(eq(articleComments.id, id))
+      .returning({ id: articleComments.id });
+    return deleted.length > 0;
+  } catch (error) {
+    console.error('Failed to delete comment:', error);
+    throw new Error('ไม่สามารถลบความคิดเห็นได้', { cause: error });
   }
 }
 
@@ -496,6 +717,7 @@ export async function createAdminArticle(input: ArticleInput): Promise<Article> 
         duration: input.duration,
         budgetEstimate: input.budget_estimate,
         highlights: input.highlights,
+        googleMapsUrl: input.google_maps_url,
         coverImage: input.cover_image,
         excerpt: input.excerpt,
         content: input.content,
@@ -553,6 +775,7 @@ export async function updateAdminArticle(
         duration: input.duration,
         budgetEstimate: input.budget_estimate,
         highlights: input.highlights,
+        googleMapsUrl: input.google_maps_url,
         coverImage: input.cover_image,
         excerpt: input.excerpt,
         content: input.content,
@@ -611,12 +834,20 @@ export async function deleteAdminArticle(id: number): Promise<boolean> {
   }
 }
 
-// ---------- Media Library ----------
+// ---------- Media Library (Durable PostgreSQL Storage + Disk Cache) ----------
 
 export async function listMediaAssets(): Promise<MediaAsset[]> {
   try {
     const rows = await db
-      .select()
+      .select({
+        id: media.id,
+        filename: media.filename,
+        originalName: media.originalName,
+        mimeType: media.mimeType,
+        size: media.size,
+        url: media.url,
+        createdAt: media.createdAt,
+      })
       .from(media)
       .orderBy(desc(media.createdAt))
       .limit(100);
@@ -633,13 +864,53 @@ export async function createMediaAsset(input: {
   mimeType: string;
   size: number;
   url: string;
+  contentBase64?: string;
 }): Promise<MediaAsset> {
   try {
-    const [created] = await db.insert(media).values(input).returning();
+    const [created] = await db
+      .insert(media)
+      .values({
+        filename: input.filename,
+        originalName: input.originalName,
+        mimeType: input.mimeType,
+        size: input.size,
+        url: input.url,
+        contentBase64: input.contentBase64 ?? '',
+      })
+      .returning({
+        id: media.id,
+        filename: media.filename,
+        originalName: media.originalName,
+        mimeType: media.mimeType,
+        size: media.size,
+        url: media.url,
+        createdAt: media.createdAt,
+      });
     return mapMedia(created);
   } catch (error) {
     console.error('Failed to record media asset:', error);
     throw new Error('ไม่สามารถบันทึกข้อมูลไฟล์รูปภาพได้', { cause: error });
+  }
+}
+
+export async function getMediaBinaryByFilename(
+  filename: string,
+): Promise<{ mimeType: string; contentBase64: string } | null> {
+  try {
+    const rows = await db
+      .select({
+        mimeType: media.mimeType,
+        contentBase64: media.contentBase64,
+      })
+      .from(media)
+      .where(eq(media.filename, filename))
+      .limit(1);
+
+    if (!rows[0] || !rows[0].contentBase64) return null;
+    return rows[0];
+  } catch (error) {
+    console.error('Failed to load media binary from database:', error);
+    return null;
   }
 }
 

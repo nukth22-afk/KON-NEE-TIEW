@@ -28,6 +28,7 @@ export function WebsiteSettingsPanel({
     intro_description: settings.intro_description,
     about_image: settings.about_image,
     about_story: settings.about_story,
+    camera_gear: settings.camera_gear,
     contact_email: settings.contact_email,
     facebook_url: settings.facebook_url,
     instagram_url: settings.instagram_url,
@@ -190,34 +191,44 @@ export function WebsiteSettingsPanel({
               <span className="text-xs text-[#7D827D]">ค่าเริ่มต้น</span>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <button
-              type="button"
-              disabled={uploadingField === 'logo_url'}
-              onClick={() => logoInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-[#DCD7CB] hover:bg-[#F4F2EC] text-xs font-medium text-[#252525] cursor-pointer"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>
-                {uploadingField === 'logo_url' ? 'กำลังอัปโหลด...' : 'อัปโหลดโลโก้'}
-              </span>
-            </button>
-            {form.logo_url && (
+          <div className="flex-1 min-w-0 space-y-2">
+            <div className="flex flex-wrap items-center gap-2.5">
               <button
                 type="button"
-                onClick={() => setForm({ ...form, logo_url: '' })}
-                className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium text-[#B82860] hover:bg-[#FEF4F8] cursor-pointer"
+                disabled={uploadingField === 'logo_url'}
+                onClick={() => logoInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-[#DCD7CB] hover:bg-[#F4F2EC] text-xs font-medium text-[#252525] cursor-pointer"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>ใช้ไอคอนค่าเริ่มต้น</span>
+                <Upload className="w-3.5 h-3.5" />
+                <span>
+                  {uploadingField === 'logo_url' ? 'กำลังอัปโหลด...' : 'อัปโหลดโลโก้'}
+                </span>
               </button>
-            )}
+              {form.logo_url && (
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, logo_url: '' })}
+                  className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium text-[#B82860] hover:bg-[#FEF4F8] cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>ใช้ไอคอนค่าเริ่มต้น</span>
+                </button>
+              )}
+              <input
+                ref={logoInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                className="hidden"
+                onChange={(e) => handleUploadAsset('logo_url', e.target.files)}
+              />
+            </div>
             <input
-              ref={logoInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/gif"
-              className="hidden"
-              onChange={(e) => handleUploadAsset('logo_url', e.target.files)}
+              type="text"
+              aria-label="ลิงก์รูปภาพโลโก้ (URL)"
+              value={form.logo_url}
+              onChange={(e) => setForm({ ...form, logo_url: e.target.value })}
+              placeholder="หรือวางลิงก์รูปโลโก้ เช่น https://res.cloudinary.com/..."
+              className="w-full px-3.5 py-2 rounded-xl border border-[#D8D4C9] bg-[#FAFAF7] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white"
             />
           </div>
         </div>
@@ -258,6 +269,14 @@ export function WebsiteSettingsPanel({
               accept="image/jpeg,image/png,image/webp,image/gif"
               className="hidden"
               onChange={(e) => handleUploadAsset('hero_image', e.target.files)}
+            />
+            <input
+              type="text"
+              aria-label="ลิงก์รูปภาพ Hero Banner (URL)"
+              value={form.hero_image}
+              onChange={(e) => setForm({ ...form, hero_image: e.target.value })}
+              placeholder="หรือวางลิงก์รูปภาพภายนอก (https://...)"
+              className="w-full px-3.5 py-2 rounded-xl border border-[#D8D4C9] bg-[#FAFAF7] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white"
             />
           </div>
 
@@ -380,6 +399,14 @@ export function WebsiteSettingsPanel({
               className="hidden"
               onChange={(e) => handleUploadAsset('about_image', e.target.files)}
             />
+            <input
+              type="text"
+              aria-label="ลิงก์รูปภาพหน้าเกี่ยวกับเรา (URL)"
+              value={form.about_image}
+              onChange={(e) => setForm({ ...form, about_image: e.target.value })}
+              placeholder="หรือวางลิงก์รูปภาพภายนอก (https://...)"
+              className="w-full px-3.5 py-2 rounded-xl border border-[#D8D4C9] bg-[#FAFAF7] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white"
+            />
           </div>
 
           <div className="lg:col-span-8 space-y-4">
@@ -395,6 +422,23 @@ export function WebsiteSettingsPanel({
                 rows={5}
                 value={form.about_story}
                 onChange={(e) => setForm({ ...form, about_story: e.target.value })}
+                className="w-full px-4 py-2.5 rounded-xl border border-[#D8D4C9] bg-[#FAFAF7] text-sm text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white resize-y"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="set-camera-gear"
+                className="block text-xs font-medium text-[#252525] mb-1.5"
+              >
+                อุปกรณ์ถ่ายภาพคู่ใจ (ขึ้นบรรทัดใหม่สำหรับแต่ละรายการ เช่น ชื่ออุปกรณ์ — คำอธิบาย)
+              </label>
+              <textarea
+                id="set-camera-gear"
+                rows={4}
+                value={form.camera_gear}
+                onChange={(e) => setForm({ ...form, camera_gear: e.target.value })}
+                placeholder="กล้อง Mirrorless Full-Frame — บันทึกภาพทิวทัศน์และแสงธรรมชาติ"
                 className="w-full px-4 py-2.5 rounded-xl border border-[#D8D4C9] bg-[#FAFAF7] text-sm text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white resize-y"
               />
             </div>

@@ -14,6 +14,7 @@ import { Navbar } from './components/Navbar';
 import { PhotoPostcards } from './components/PhotoPostcards';
 import { RegionExplorer } from './components/RegionExplorer';
 import { SavedTripsDrawer } from './components/SavedTripsDrawer';
+import { ThailandFootprintMap } from './components/ThailandFootprintMap';
 import {
   fetchArticleDetail,
   fetchPublishedArticles,
@@ -26,6 +27,8 @@ import {
   DEFAULT_SITE_SETTINGS,
   type AdminUser,
   type Article,
+  type ArticleComment,
+  type ArticleSummaryNav,
   type SiteOverview,
   type SiteSettings,
   type ThaiRegion,
@@ -33,7 +36,7 @@ import {
 
 type RouteView =
   | { name: 'home' }
-  | { name: 'destinations'; focusSearch?: boolean }
+  | { name: 'destinations'; focusSearch?: boolean; queryKey?: string }
   | { name: 'about' }
   | { name: 'article'; slug: string }
   | { name: 'admin' }
@@ -72,7 +75,7 @@ function parseLocationRoute(): RouteView {
     return { name: 'admin' };
   }
   if (pathname === '/destinations') {
-    return { name: 'destinations' };
+    return { name: 'destinations', queryKey: window.location.search };
   }
   if (pathname === '/about') {
     return { name: 'about' };
@@ -109,6 +112,9 @@ export default function App() {
   // Article detail view state
   const [currentArticle, setCurrentArticle] = useState<Article | null>(null);
   const [relatedArticles, setRelatedArticles] = useState<Article[]>([]);
+  const [prevArticle, setPrevArticle] = useState<ArticleSummaryNav | null>(null);
+  const [nextArticle, setNextArticle] = useState<ArticleSummaryNav | null>(null);
+  const [articleComments, setArticleComments] = useState<ArticleComment[]>([]);
   const [articleLoading, setArticleLoading] = useState(false);
   const [articleError, setArticleError] = useState('');
 
@@ -180,11 +186,12 @@ export default function App() {
   }, [allPublished, savedIdsList]);
 
   const navigate = useCallback((nextRoute: RouteView, urlPath: string) => {
-    setRoute(nextRoute);
     const targetPath = withBasePath(urlPath);
-    if (window.location.pathname !== targetPath) {
+    const currentFull = `${window.location.pathname}${window.location.search}`;
+    if (currentFull !== targetPath) {
       window.history.pushState({}, '', targetPath);
     }
+    setRoute(nextRoute);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
@@ -196,19 +203,12 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Update document title for non-article pages
+  // Update document title
   useEffect(() => {
     if (route.name === 'article') return;
     const siteName = siteSettings.site_name || 'ฅนหนีเที่ยว';
-    if (route.name === 'destinations') {
-      document.title = `สถานที่ท่องเที่ยวทั้งหมด | ${siteName}`;
-    } else if (route.name === 'about') {
-      document.title = `เกี่ยวกับเรา | ${siteName}`;
-    } else if (route.name === 'admin' || route.name === 'admin-editor') {
-      document.title = `ระบบจัดการเนื้อหา | ${siteName}`;
-    } else {
-      document.title = `${siteName} (${siteSettings.site_name_en || 'KON NEE TIEW'}) — ${siteSettings.slogan}`;
-    }
+    const siteNameEn = siteSettings.site_name_en || 'KON NEE TIEW';
+    document.title = `${siteName} ${siteNameEn}`.trim();
   }, [route.name, siteSettings]);
 
   const loadHomepageData = useCallback(async () => {
@@ -255,15 +255,21 @@ export default function App() {
     setArticleLoading(true);
     setArticleError('');
     fetchArticleDetail(route.slug)
-      .then(({ article, related }) => {
+      .then(({ article, related, prevArticle: prev, nextArticle: next, comments }) => {
         if (!active) return;
         setCurrentArticle(article);
         setRelatedArticles(related);
+        setPrevArticle(prev);
+        setNextArticle(next);
+        setArticleComments(comments);
       })
       .catch((err) => {
         if (!active) return;
         setCurrentArticle(null);
         setRelatedArticles([]);
+        setPrevArticle(null);
+        setNextArticle(null);
+        setArticleComments([]);
         setArticleError(
           err instanceof Error ? err.message : 'ไม่พบบทความท่องเที่ยวที่ต้องการ',
         );
@@ -286,7 +292,21 @@ export default function App() {
   };
 
   const handleGoDestinations = (focusSearch = false) => {
-    navigate({ name: 'destinations', focusSearch }, '/destinations');
+    navigate({ name: 'destinations', focusSearch, queryKey: '' }, '/destinations');
+  };
+
+  const handleGoDestinationsWithQuery = (params: {
+    province?: string;
+    region?: ThaiRegion;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params.province) qs.set('province', params.province);
+    if (params.region) qs.set('region', params.region);
+    const searchStr = qs.toString() ? `?${qs.toString()}` : '';
+    navigate(
+      { name: 'destinations', queryKey: searchStr },
+      `/destinations${searchStr}`,
+    );
   };
 
   const handleGoAbout = () => {
@@ -461,6 +481,17 @@ export default function App() {
               onSelectArticle={handleSelectArticle}
             />
 
+            <ThailandFootprintMap
+              overview={overview}
+              onSelectProvince={(province) =>
+                handleGoDestinationsWithQuery({ province })
+              }
+              onSelectRegion={(region) =>
+                handleGoDestinationsWithQuery({ region })
+              }
+              onOpenArticleBySlug={handleOpenArticleBySlug}
+            />
+
             <FeaturedSpotlight
               overview={overview}
               savedIds={savedIds}
@@ -479,6 +510,7 @@ export default function App() {
           <AllDestinationsPage
             provinces={overview?.provinces ?? []}
             autoFocusSearch={Boolean(route.focusSearch)}
+            queryKey={route.queryKey ?? ''}
             savedIds={savedIds}
             onToggleSave={toggleSaveTrip}
             onSelectArticle={handleSelectArticle}
@@ -487,7 +519,9 @@ export default function App() {
           <AboutPage
             settings={siteSettings}
             overview={overview}
+            articles={allPublished}
             onExploreDestinations={() => handleGoDestinations(false)}
+            onSelectArticle={handleSelectArticle}
           />
         ) : articleLoading && !currentArticle ? (
           <div className="pt-36 pb-24 max-w-[960px] mx-auto px-5 sm:px-8 animate-pulse">
@@ -515,11 +549,15 @@ export default function App() {
           <ArticleDetail
             article={currentArticle}
             related={relatedArticles}
+            prevArticle={prevArticle}
+            nextArticle={nextArticle}
+            initialComments={articleComments}
             settings={siteSettings}
             isSaved={savedIds.has(currentArticle.id)}
             onToggleSave={toggleSaveTrip}
             onBack={handleGoHome}
             onSelectArticle={handleSelectArticle}
+            onSelectSlug={handleOpenArticleBySlug}
           />
         )}
       </main>

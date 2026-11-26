@@ -33,12 +33,14 @@ export const articles = pgTable(
     duration: text('duration').notNull().default(''),
     budgetEstimate: text('budget_estimate').notNull().default(''),
     highlights: text('highlights').notNull().default(''),
+    googleMapsUrl: text('google_maps_url').notNull().default(''),
     coverImage: text('cover_image').notNull(),
     excerpt: text('excerpt').notNull(),
     content: text('content').notNull(),
     status: text('status').notNull().default('draft'),
     isFeatured: boolean('is_featured').notNull().default(false),
     views: integer('views').notNull().default(0),
+    likesCount: integer('likes_count').notNull().default(0),
     publishedAt: timestamp('published_at'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -64,6 +66,26 @@ export const articleImages = pgTable(
   },
   (table) => [
     index('idx_article_images_article_sort').on(table.articleId, table.sortOrder),
+  ],
+);
+
+export const articleComments = pgTable(
+  'article_comments',
+  {
+    id: serial('id').primaryKey(),
+    articleId: integer('article_id')
+      .notNull()
+      .references(() => articles.id, { onDelete: 'cascade' }),
+    authorName: text('author_name').notNull(),
+    message: text('message').notNull(),
+    isApproved: boolean('is_approved').notNull().default(false),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [
+    index('idx_article_comments_article_approved').on(
+      table.articleId,
+      table.isApproved,
+    ),
   ],
 );
 
@@ -101,6 +123,11 @@ export const siteSettings = pgTable('site_settings', {
     .default(
       'ฅนหนีเที่ยว เกิดจากความตั้งใจอยากเก็บเรื่องราวและภาพถ่ายจากทุกสถานที่ที่เคยได้ออกเดินทางไปสัมผัสจริง ไม่ว่าจะเป็นยอดดอยในสายหมอก ผืนป่ามรดกโลก น้ำตกกลางหุบเขา หรือชายหาดเงียบสงบ เพื่อให้ที่นี่เป็นสมุดบันทึกการเดินทางและแรงบันดาลใจสำหรับทุกคนที่อยากลองเก็บกระเป๋าออกเดินทางดูสักครั้ง',
     ),
+  cameraGear: text('camera_gear')
+    .notNull()
+    .default(
+      'กล้อง Mirrorless Full-Frame — บันทึกภาพทิวทัศน์และแสงธรรมชาติ\nเลนส์มุมกว้าง 16–35mm — เก็บความยิ่งใหญ่ของภูเขาและทะเลหมอก\nเลนส์ระยะอเนกประสงค์ 24–70mm — ถ่ายทอดบรรยากาศระหว่างทางและวิถีชีวิต\nขาตั้งกล้องคาร์บอนน้ำหนักเบา — สำหรับแสงเช้า แสงเย็น และภาพน้ำตก',
+    ),
   contactEmail: text('contact_email').notNull().default(''),
   facebookUrl: text('facebook_url').notNull().default(''),
   instagramUrl: text('instagram_url').notNull().default(''),
@@ -115,16 +142,25 @@ export const media = pgTable('media', {
   mimeType: text('mime_type').notNull(),
   size: integer('size').notNull(),
   url: text('url').notNull(),
+  contentBase64: text('content_base64').notNull().default(''),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
 export const articlesRelations = relations(articles, ({ many }) => ({
   images: many(articleImages),
+  comments: many(articleComments),
 }));
 
 export const articleImagesRelations = relations(articleImages, ({ one }) => ({
   article: one(articles, {
     fields: [articleImages.articleId],
+    references: [articles.id],
+  }),
+}));
+
+export const articleCommentsRelations = relations(articleComments, ({ one }) => ({
+  article: one(articles, {
+    fields: [articleComments.articleId],
     references: [articles.id],
   }),
 }));

@@ -25,8 +25,10 @@ CREATE TABLE IF NOT EXISTS articles (
   duration TEXT NOT NULL DEFAULT '',
   budget_estimate TEXT NOT NULL DEFAULT '',
   highlights TEXT NOT NULL DEFAULT '',
+  google_maps_url TEXT NOT NULL DEFAULT '',
   is_featured BOOLEAN NOT NULL DEFAULT FALSE,
   views INTEGER NOT NULL DEFAULT 0,
+  likes_count INTEGER NOT NULL DEFAULT 0,
   excerpt TEXT NOT NULL,
   cover_image TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -51,6 +53,18 @@ CREATE TABLE IF NOT EXISTS article_images (
 
 CREATE INDEX IF NOT EXISTS idx_article_images_article_id ON article_images (article_id);
 
+CREATE TABLE IF NOT EXISTS article_comments (
+  id SERIAL PRIMARY KEY,
+  article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  author_name TEXT NOT NULL,
+  message TEXT NOT NULL,
+  is_approved BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_comments_article_approved
+  ON article_comments (article_id, is_approved);
+
 CREATE TABLE IF NOT EXISTS site_settings (
   id SERIAL PRIMARY KEY,
   site_name TEXT NOT NULL DEFAULT 'ฅนหนีเที่ยว',
@@ -65,6 +79,7 @@ CREATE TABLE IF NOT EXISTS site_settings (
   intro_description TEXT NOT NULL DEFAULT '',
   about_image TEXT NOT NULL DEFAULT '/src/assets/images/dest_pha_keb_tawan_1795675255672.jpg',
   about_story TEXT NOT NULL DEFAULT '',
+  camera_gear TEXT NOT NULL DEFAULT '',
   contact_email TEXT NOT NULL DEFAULT '',
   facebook_url TEXT NOT NULL DEFAULT '',
   instagram_url TEXT NOT NULL DEFAULT '',
@@ -79,6 +94,7 @@ CREATE TABLE IF NOT EXISTS media (
   mime_type TEXT NOT NULL,
   size INTEGER NOT NULL,
   url TEXT NOT NULL,
+  content_base64 TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

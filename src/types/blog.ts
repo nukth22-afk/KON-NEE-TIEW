@@ -28,6 +28,26 @@ export interface GalleryImage {
   sort_order?: number;
 }
 
+export interface ArticleComment {
+  id: number;
+  article_id: number;
+  article_title?: string;
+  article_slug?: string;
+  author_name: string;
+  message: string;
+  is_approved: boolean;
+  created_at: string;
+}
+
+export interface ArticleSummaryNav {
+  id: number;
+  slug: string;
+  title: string;
+  place_name: string;
+  province: string;
+  cover_image: string;
+}
+
 export interface Article {
   id: number;
   slug: string;
@@ -41,8 +61,10 @@ export interface Article {
   duration: string;
   budget_estimate: string;
   highlights: string;
+  google_maps_url: string;
   is_featured: boolean;
   views: number;
+  likes_count: number;
   excerpt: string;
   cover_image: string;
   content: string;
@@ -65,6 +87,7 @@ export interface ArticleInput {
   duration: string;
   budget_estimate: string;
   highlights: string;
+  google_maps_url: string;
   is_featured: boolean;
   excerpt: string;
   cover_image: string;
@@ -87,6 +110,7 @@ export interface SiteSettings {
   intro_description: string;
   about_image: string;
   about_story: string;
+  camera_gear: string;
   contact_email: string;
   facebook_url: string;
   instagram_url: string;
@@ -105,6 +129,14 @@ export interface PhotoPostcard {
   article_id: number;
 }
 
+export interface ProvinceFootprint {
+  province: string;
+  region: ThaiRegion;
+  count: number;
+  latestSlug: string;
+  latestPlace: string;
+}
+
 export interface SiteOverview {
   stats: {
     totalArticles: number;
@@ -114,6 +146,7 @@ export interface SiteOverview {
   };
   regionCounts: Record<ThaiRegion, number>;
   provinces: string[];
+  provinceFootprints?: ProvinceFootprint[];
   featuredArticle: Article | null;
   postcards: PhotoPostcard[];
 }
@@ -153,6 +186,8 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   about_image: '/src/assets/images/dest_pha_keb_tawan_1795675255672.jpg',
   about_story:
     'ฅนหนีเที่ยว เกิดจากความตั้งใจอยากเก็บเรื่องราวและภาพถ่ายจากทุกสถานที่ที่เคยได้ออกเดินทางไปสัมผัสจริง ไม่ว่าจะเป็นยอดดอยในสายหมอก ผืนป่ามรดกโลก น้ำตกกลางหุบเขา หรือชายหาดเงียบสงบ เพื่อให้ที่นี่เป็นสมุดบันทึกการเดินทางและแรงบันดาลใจสำหรับทุกคนที่อยากลองเก็บกระเป๋าออกเดินทางดูสักครั้ง',
+  camera_gear:
+    'กล้อง Mirrorless Full-Frame — บันทึกภาพทิวทัศน์และแสงธรรมชาติ\nเลนส์มุมกว้าง 16–35mm — เก็บความยิ่งใหญ่ของภูเขาและทะเลหมอก\nเลนส์ระยะอเนกประสงค์ 24–70mm — ถ่ายทอดบรรยากาศระหว่างทางและวิถีชีวิต\nขาตั้งกล้องคาร์บอนน้ำหนักเบา — สำหรับแสงเช้า แสงเย็น และภาพน้ำตก',
   contact_email: '',
   facebook_url: '',
   instagram_url: '',

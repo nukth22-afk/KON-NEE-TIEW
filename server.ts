@@ -7,21 +7,33 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import {
   createAdminArticle,
+  createArticleComment,
   createMediaAsset,
   deleteAdminArticle,
+  deleteAdminComment,
   deleteMediaAssetRecord,
   getAdminArticleById,
+  getMediaBinaryByFilename,
   getPublishedArticleBySlugOrId,
   getSiteOverview,
   getSiteSettings,
+  incrementArticleLike,
   listAdminArticles,
+  listAllAdminComments,
+  listApprovedComments,
   listMediaAssets,
   listPublishedArticles,
   setArticleFeaturedFlag,
+  setCommentApproval,
   updateAdminArticle,
   updateSiteSettings,
 } from './src/db/repository.ts';
 import { requireAdmin, type AuthRequest } from './src/middleware/auth.ts';
+import {
+  deleteFromCloudinaryByFilename,
+  isCloudinaryConfigured,
+  uploadBufferToCloudinary,
+} from './src/lib/cloudinary.ts';
 import {
   THAI_REGIONS,
   TRAVEL_STYLES,
@@ -127,6 +139,10 @@ function validateArticleBody(body: unknown): {
     typeof b.budget_estimate === 'string' ? b.budget_estimate.trim().slice(0, 120) : '';
   const highlights =
     typeof b.highlights === 'string' ? b.highlights.trim().slice(0, 320) : '';
+  const google_maps_url =
+    typeof b.google_maps_url === 'string'
+      ? b.google_maps_url.trim().slice(0, 600)
+      : '';
   const is_featured = Boolean(b.is_featured);
   const excerpt = typeof b.excerpt === 'string' ? b.excerpt.trim() : '';
   const cover_image = typeof b.cover_image === 'string' ? b.cover_image.trim() : '';
@@ -147,6 +163,9 @@ function validateArticleBody(body: unknown): {
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(travel_date)) {
     return { error: 'กรุณาระบุวันที่เดินทางในรูปแบบที่ถูกต้อง' };
+  }
+  if (!isSafeExternalUrl(google_maps_url)) {
+    return { error: 'ลิงก์ Google Maps ต้องขึ้นต้นด้วย https:// หรือ http://' };
   }
   if (!cover_image || !isSafeImageUrl(cover_image)) {
     return { error: 'กรุณาอัปโหลดหรือเลือกรูปภาพหน้าปกที่ถูกต้อง' };
@@ -196,6 +215,7 @@ function validateArticleBody(body: unknown): {
       duration,
       budget_estimate,
       highlights,
+      google_maps_url,
       is_featured,
       excerpt: autoExcerpt.slice(0, 320),
       cover_image,
@@ -229,6 +249,7 @@ function validateSettingsBody(body: unknown): {
   const intro_description = str('intro_description', 600);
   const about_image = str('about_image', 500);
   const about_story = str('about_story', 5000);
+  const camera_gear = str('camera_gear', 3000);
   const contact_email = str('contact_email', 160);
   const facebook_url = str('facebook_url', 300);
   const instagram_url = str('instagram_url', 300);
@@ -267,6 +288,7 @@ function validateSettingsBody(body: unknown): {
       intro_description,
       about_image,
       about_story,
+      camera_gear,
       contact_email,
       facebook_url,
       instagram_url,
@@ -282,6 +304,36 @@ function escapeXml(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+// ---------- Lightweight Rate Limiter ----------
+
+const rateLimitStore = new Map<string, number[]>();
+
+function getClientIp(req: express.Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+function isRateLimited(key: string, maxRequests: number, windowMs: number): boolean {
+  const now = Date.now();
+  const existing = (rateLimitStore.get(key) || []).filter((ts) => now - ts < windowMs);
+  if (existing.length >= maxRequests) {
+    rateLimitStore.set(key, existing);
+    return true;
+  }
+  existing.push(now);
+  rateLimitStore.set(key, existing);
+  if (rateLimitStore.size > 1000) {
+    for (const [k, timestamps] of rateLimitStore.entries()) {
+      const fresh = timestamps.filter((ts) => now - ts < windowMs);
+      if (fresh.length === 0) rateLimitStore.delete(k);
+    }
+  }
+  return false;
 }
 
 // ---------- Express Server ----------
@@ -338,6 +390,39 @@ async function startServer() {
       },
     }),
   );
+
+  // Durable PostgreSQL fallback when Cloud Run ephemeral disk restarts
+  app.get('/uploads/:filename', async (req, res) => {
+    const filename = path.basename(String(req.params.filename));
+    if (!filename || !/^[a-zA-Z0-9._-]+$/.test(filename)) {
+      res.status(400).end();
+      return;
+    }
+
+    try {
+      const record = await getMediaBinaryByFilename(filename);
+      if (!record || !record.contentBase64) {
+        res.status(404).end();
+        return;
+      }
+
+      const buffer = Buffer.from(record.contentBase64, 'base64');
+      const destPath = path.resolve(UPLOADS_DIR, filename);
+      if (destPath.startsWith(UPLOADS_DIR + path.sep)) {
+        fs.writeFile(destPath, buffer, () => {
+          // Best-effort warm local cache
+        });
+      }
+
+      res.setHeader('Content-Type', record.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.send(buffer);
+    } catch (err) {
+      console.error('Failed to stream media from PostgreSQL:', err);
+      res.status(500).end();
+    }
+  });
 
   // ---------- SEO Endpoints (/robots.txt & /sitemap.xml) ----------
 
@@ -451,6 +536,105 @@ async function startServer() {
       res.json(result);
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'ไม่สามารถโหลดรายละเอียดบทความได้';
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.post('/api/articles/:id/like', async (req, res) => {
+    const id = Number.parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'รหัสบทความไม่ถูกต้อง' });
+      return;
+    }
+
+    const ip = getClientIp(req);
+    if (isRateLimited(`like:${ip}:${id}`, 5, 10 * 60 * 1000)) {
+      res.status(429).json({ error: 'คุณกดถูกใจบทความนี้ไปแล้ว กรุณารอสักครู่' });
+      return;
+    }
+
+    try {
+      const likesCount = await incrementArticleLike(id);
+      if (likesCount === null) {
+        res.status(404).json({ error: 'ไม่พบบทความที่ต้องการ' });
+        return;
+      }
+      res.json({ likes_count: likesCount });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'ไม่สามารถบันทึกการถูกใจได้';
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.get('/api/articles/:id/comments', async (req, res) => {
+    const id = Number.parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'รหัสบทความไม่ถูกต้อง' });
+      return;
+    }
+    try {
+      const comments = await listApprovedComments(id);
+      res.json({ comments });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'ไม่สามารถโหลดความคิดเห็นได้';
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.post('/api/articles/:id/comments', async (req, res) => {
+    const id = Number.parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'รหัสบทความไม่ถูกต้อง' });
+      return;
+    }
+
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
+      string,
+      unknown
+    >;
+
+    // Hidden honeypot field check against spam bots
+    const honeypot = typeof body.website === 'string' ? body.website.trim() : '';
+    if (honeypot) {
+      res.status(201).json({
+        message: 'ส่งความคิดเห็นเรียบร้อยแล้ว รอผู้ดูแลตรวจสอบก่อนแสดงผล',
+      });
+      return;
+    }
+
+    const ip = getClientIp(req);
+    if (isRateLimited(`comment:${ip}`, 5, 10 * 60 * 1000)) {
+      res.status(429).json({
+        error: 'คุณส่งความคิดเห็นบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่อีกครั้ง',
+      });
+      return;
+    }
+
+    const authorName =
+      typeof body.author_name === 'string' ? body.author_name.trim() : '';
+    const message = typeof body.message === 'string' ? body.message.trim() : '';
+
+    if (authorName.length < 2 || authorName.length > 60) {
+      res.status(400).json({ error: 'กรุณาระบุชื่อของคุณ (2–60 ตัวอักษร)' });
+      return;
+    }
+    if (message.length < 4 || message.length > 1000) {
+      res.status(400).json({ error: 'กรุณาเขียนข้อความอย่างน้อย 4 ตัวอักษร (ไม่เกิน 1,000 ตัวอักษร)' });
+      return;
+    }
+
+    try {
+      const comment = await createArticleComment(id, authorName, message);
+      if (!comment) {
+        res.status(404).json({ error: 'ไม่พบบทความที่ต้องการแสดงความคิดเห็น' });
+        return;
+      }
+      res.status(201).json({
+        comment,
+        message: 'ส่งความคิดเห็นเรียบร้อยแล้ว รอผู้ดูแลตรวจสอบก่อนแสดงผล',
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'ไม่สามารถส่งความคิดเห็นได้';
       res.status(500).json({ error: msg });
     }
   });
@@ -592,14 +776,115 @@ async function startServer() {
     }
   });
 
+  // ---------- Admin Protected Comments Moderation Routes ----------
+
+  app.get('/api/admin/comments', requireAdmin, async (_req, res) => {
+    try {
+      const comments = await listAllAdminComments();
+      res.json({ comments });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'ไม่สามารถโหลดความคิดเห็นได้';
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.patch('/api/admin/comments/:id', requireAdmin, async (req, res) => {
+    const id = Number.parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'รหัสความคิดเห็นไม่ถูกต้อง' });
+      return;
+    }
+    try {
+      const comment = await setCommentApproval(id, Boolean(req.body?.is_approved));
+      if (!comment) {
+        res.status(404).json({ error: 'ไม่พบความคิดเห็นที่ต้องการอัปเดต' });
+        return;
+      }
+      res.json({ comment });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'ไม่สามารถอัปเดตสถานะความคิดเห็นได้';
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.delete('/api/admin/comments/:id', requireAdmin, async (req, res) => {
+    const id = Number.parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'รหัสความคิดเห็นไม่ถูกต้อง' });
+      return;
+    }
+    try {
+      const deleted = await deleteAdminComment(id);
+      if (!deleted) {
+        res.status(404).json({ error: 'ไม่พบความคิดเห็นที่ต้องการลบ' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'ไม่สามารถลบความคิดเห็นได้';
+      res.status(500).json({ error: msg });
+    }
+  });
+
   // ---------- Admin Protected Media Routes ----------
 
   app.get('/api/admin/media', requireAdmin, async (_req, res) => {
     try {
       const list = await listMediaAssets();
-      res.json({ media: list });
+      res.json({
+        media: list,
+        storageMode: isCloudinaryConfigured() ? 'cloudinary' : 'database',
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'ไม่สามารถโหลดคลังรูปภาพได้';
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.post('/api/admin/media/external', requireAdmin, async (req, res) => {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
+      string,
+      unknown
+    >;
+    const rawUrl = typeof body.url === 'string' ? body.url.trim() : '';
+    const rawLabel = typeof body.label === 'string' ? body.label.trim().slice(0, 180) : '';
+
+    if (!rawUrl || rawUrl.length > 600 || !isSafeExternalUrl(rawUrl)) {
+      res.status(400).json({
+        error: 'กรุณาระบุลิงก์รูปภาพภายนอกที่ขึ้นต้นด้วย https:// หรือ http://',
+      });
+      return;
+    }
+
+    let fallbackLabel = 'external-image';
+    try {
+      const parsed = new URL(rawUrl);
+      const lastSegment = decodeURIComponent(
+        parsed.pathname.split('/').filter(Boolean).pop() || '',
+      );
+      if (lastSegment) {
+        fallbackLabel = lastSegment.slice(0, 180);
+      } else if (parsed.hostname) {
+        fallbackLabel = parsed.hostname.slice(0, 180);
+      }
+    } catch {
+      res.status(400).json({ error: 'รูปแบบลิงก์รูปภาพไม่ถูกต้อง' });
+      return;
+    }
+
+    try {
+      const filename = `ext-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
+      const asset = await createMediaAsset({
+        filename,
+        originalName: rawLabel || fallbackLabel,
+        mimeType: 'image/external',
+        size: 0,
+        url: rawUrl,
+        contentBase64: '',
+      });
+      res.status(201).json({ asset });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'ไม่สามารถบันทึกลิงก์รูปภาพได้';
       res.status(500).json({ error: msg });
     }
   });
@@ -623,6 +908,7 @@ async function startServer() {
       }
 
       try {
+        const useCloudinary = isCloudinaryConfigured();
         const uploaded = [];
         for (const file of files) {
           const detected = detectImageType(file.buffer);
@@ -633,25 +919,50 @@ async function startServer() {
             return;
           }
 
-          const safeName = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${detected.ext}`;
-          const destPath = path.resolve(UPLOADS_DIR, safeName);
-          if (!destPath.startsWith(UPLOADS_DIR + path.sep)) {
-            res.status(400).json({ error: 'ชื่อไฟล์ไม่ถูกต้อง' });
-            return;
+          if (useCloudinary) {
+            const publicIdBase = `cld-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
+            const safeName = `${publicIdBase}${detected.ext}`;
+            const originalName = (file.originalname || safeName).slice(0, 180);
+
+            const cloudRes = await uploadBufferToCloudinary(
+              file.buffer,
+              detected.mime,
+              publicIdBase,
+              detected.ext,
+            );
+
+            // Store ONLY lightweight URL metadata in PostgreSQL (0 bytes binary in Cloud SQL)
+            const savedAsset = await createMediaAsset({
+              filename: safeName,
+              originalName,
+              mimeType: detected.mime,
+              size: cloudRes.bytes,
+              url: cloudRes.secureUrl,
+              contentBase64: '',
+            });
+            uploaded.push(savedAsset);
+          } else {
+            const safeName = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${detected.ext}`;
+            const destPath = path.resolve(UPLOADS_DIR, safeName);
+            if (!destPath.startsWith(UPLOADS_DIR + path.sep)) {
+              res.status(400).json({ error: 'ชื่อไฟล์ไม่ถูกต้อง' });
+              return;
+            }
+
+            fs.writeFileSync(destPath, file.buffer);
+            const url = `/uploads/${safeName}`;
+            const originalName = (file.originalname || safeName).slice(0, 180);
+
+            const savedAsset = await createMediaAsset({
+              filename: safeName,
+              originalName,
+              mimeType: detected.mime,
+              size: file.size,
+              url,
+              contentBase64: file.buffer.toString('base64'),
+            });
+            uploaded.push(savedAsset);
           }
-
-          fs.writeFileSync(destPath, file.buffer);
-          const url = `/uploads/${safeName}`;
-          const originalName = (file.originalname || safeName).slice(0, 180);
-
-          const savedAsset = await createMediaAsset({
-            filename: safeName,
-            originalName,
-            mimeType: detected.mime,
-            size: file.size,
-            url,
-          });
-          uploaded.push(savedAsset);
         }
 
         res.status(201).json({ files: uploaded });
@@ -677,7 +988,9 @@ async function startServer() {
     }
 
     try {
-      if (fs.existsSync(targetPath)) {
+      if (filename.startsWith('cld-')) {
+        await deleteFromCloudinaryByFilename(filename);
+      } else if (fs.existsSync(targetPath)) {
         fs.unlinkSync(targetPath);
       }
       await deleteMediaAssetRecord(filename);

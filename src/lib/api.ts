@@ -4,15 +4,19 @@ import {
   THAI_REGIONS,
   type AdminUser,
   type Article,
+  type ArticleComment,
   type ArticleInput,
+  type ArticleSummaryNav,
   type MediaAsset,
   type PhotoPostcard,
+  type ProvinceFootprint,
   type SiteOverview,
   type SiteSettings,
   type SiteSettingsInput,
   type ThaiRegion,
   type TravelStyle,
 } from '../types/blog';
+import { optimizeImageFile } from './imageOptimizer';
 
 const API_BASE = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) || ''
@@ -70,6 +74,7 @@ function getFallbackOverview(): SiteOverview {
   );
 
   const provinceSet = new Set<string>();
+  const provinceMap = new Map<string, ProvinceFootprint>();
   const coveredRegions = new Set<string>();
   const postcards: PhotoPostcard[] = [];
 
@@ -77,7 +82,21 @@ function getFallbackOverview(): SiteOverview {
     if (a.region in regionCounts) {
       regionCounts[a.region] += 1;
     }
-    if (a.province) provinceSet.add(a.province);
+    if (a.province) {
+      provinceSet.add(a.province);
+      const existing = provinceMap.get(a.province);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        provinceMap.set(a.province, {
+          province: a.province,
+          region: a.region,
+          count: 1,
+          latestSlug: a.slug,
+          latestPlace: a.place_name,
+        });
+      }
+    }
     coveredRegions.add(a.region);
     if (postcards.length < 6) {
       postcards.push({
@@ -94,6 +113,10 @@ function getFallbackOverview(): SiteOverview {
   const featuredArticle =
     STATIC_ARTICLES.find((a) => a.is_featured) ?? STATIC_ARTICLES[0] ?? null;
 
+  const provinceFootprints = Array.from(provinceMap.values()).sort(
+    (a, b) => b.count - a.count || a.province.localeCompare(b.province, 'th'),
+  );
+
   return {
     stats: {
       totalArticles: STATIC_ARTICLES.length,
@@ -103,6 +126,7 @@ function getFallbackOverview(): SiteOverview {
     },
     regionCounts,
     provinces: Array.from(provinceSet).sort((a, b) => a.localeCompare(b, 'th')),
+    provinceFootprints,
     featuredArticle,
     postcards,
   };
@@ -155,19 +179,37 @@ function getFallbackArticles(params?: {
   };
 }
 
+function toSummaryNav(a: Article): ArticleSummaryNav {
+  return {
+    id: a.id,
+    slug: a.slug,
+    title: a.title,
+    place_name: a.place_name,
+    province: a.province,
+    cover_image: a.cover_image,
+  };
+}
+
 function getFallbackArticleDetail(idOrSlug: string | number): {
   article: Article;
   related: Article[];
+  prevArticle: ArticleSummaryNav | null;
+  nextArticle: ArticleSummaryNav | null;
+  comments: ArticleComment[];
 } {
   const key = String(idOrSlug);
-  const article = STATIC_ARTICLES.find(
+  const idx = STATIC_ARTICLES.findIndex(
     (a) => a.slug === key || String(a.id) === key,
   );
-  if (!article) {
+  if (idx < 0) {
     throw new Error('ไม่พบบทความท่องเที่ยวที่ต้องการ');
   }
+  const article = STATIC_ARTICLES[idx];
   const related = STATIC_ARTICLES.filter((a) => a.id !== article.id).slice(0, 3);
-  return { article, related };
+  const nextArticle = idx > 0 ? toSummaryNav(STATIC_ARTICLES[idx - 1]) : null;
+  const prevArticle =
+    idx < STATIC_ARTICLES.length - 1 ? toSummaryNav(STATIC_ARTICLES[idx + 1]) : null;
+  return { article, related, prevArticle, nextArticle, comments: [] };
 }
 
 // ---------- Public API ----------
@@ -230,18 +272,55 @@ export async function fetchPublishedArticles(params?: {
 export async function fetchArticleDetail(idOrSlug: string | number): Promise<{
   article: Article;
   related: Article[];
+  prevArticle: ArticleSummaryNav | null;
+  nextArticle: ArticleSummaryNav | null;
+  comments: ArticleComment[];
 }> {
   try {
     const res = await fetch(
       apiUrl(`/api/articles/${encodeURIComponent(String(idOrSlug))}`),
     );
-    return await parseJson<{ article: Article; related: Article[] }>(res);
+    const data = await parseJson<{
+      article: Article;
+      related: Article[];
+      prevArticle?: ArticleSummaryNav | null;
+      nextArticle?: ArticleSummaryNav | null;
+      comments?: ArticleComment[];
+    }>(res);
+    return {
+      article: data.article,
+      related: data.related,
+      prevArticle: data.prevArticle ?? null,
+      nextArticle: data.nextArticle ?? null,
+      comments: data.comments ?? [],
+    };
   } catch (err) {
     if (err instanceof BackendUnavailableError || err instanceof TypeError) {
       return getFallbackArticleDetail(idOrSlug);
     }
     throw err;
   }
+}
+
+export async function likeArticle(
+  articleId: number,
+): Promise<{ likes_count: number }> {
+  const res = await fetch(apiUrl(`/api/articles/${articleId}/like`), {
+    method: 'POST',
+  });
+  return await parseJson<{ likes_count: number }>(res);
+}
+
+export async function submitArticleComment(
+  articleId: number,
+  payload: { author_name: string; message: string; website?: string },
+): Promise<{ message: string; comment?: ArticleComment }> {
+  const res = await fetch(apiUrl(`/api/articles/${articleId}/comments`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return await parseJson<{ message: string; comment?: ArticleComment }>(res);
 }
 
 // ---------- Auth API (Firebase ID Token verified on server) ----------
@@ -361,7 +440,8 @@ export async function uploadImages(
 ): Promise<MediaAsset[]> {
   const formData = new FormData();
   const list = Array.from(files);
-  for (const file of list) {
+  const optimizedFiles = await Promise.all(list.map((file) => optimizeImageFile(file)));
+  for (const file of optimizedFiles) {
     formData.append('files', file);
   }
   const res = await fetch(apiUrl('/api/uploads'), {
@@ -373,12 +453,45 @@ export async function uploadImages(
   return data.files;
 }
 
-export async function fetchAdminMedia(token: string): Promise<MediaAsset[]> {
+export type MediaStorageMode = 'cloudinary' | 'database';
+
+export async function fetchAdminMediaInfo(token: string): Promise<{
+  media: MediaAsset[];
+  storageMode: MediaStorageMode;
+}> {
   const res = await fetch(apiUrl('/api/admin/media'), {
     headers: authHeaders(token),
   });
-  const data = await parseJson<{ media: MediaAsset[] }>(res);
-  return data.media;
+  const data = await parseJson<{
+    media: MediaAsset[];
+    storageMode?: MediaStorageMode;
+  }>(res);
+  return {
+    media: data.media,
+    storageMode: data.storageMode === 'cloudinary' ? 'cloudinary' : 'database',
+  };
+}
+
+export async function fetchAdminMedia(token: string): Promise<MediaAsset[]> {
+  const info = await fetchAdminMediaInfo(token);
+  return info.media;
+}
+
+export async function registerExternalMediaUrl(
+  token: string,
+  url: string,
+  label?: string,
+): Promise<MediaAsset> {
+  const res = await fetch(apiUrl('/api/admin/media/external'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(token),
+    },
+    body: JSON.stringify({ url, label }),
+  });
+  const data = await parseJson<{ asset: MediaAsset }>(res);
+  return data.asset;
 }
 
 export async function deleteMediaAsset(
@@ -386,6 +499,42 @@ export async function deleteMediaAsset(
   filename: string,
 ): Promise<void> {
   const res = await fetch(apiUrl(`/api/uploads/${encodeURIComponent(filename)}`), {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  await parseJson<{ ok: boolean }>(res);
+}
+
+export async function fetchAdminComments(token: string): Promise<ArticleComment[]> {
+  const res = await fetch(apiUrl('/api/admin/comments'), {
+    headers: authHeaders(token),
+  });
+  const data = await parseJson<{ comments: ArticleComment[] }>(res);
+  return data.comments;
+}
+
+export async function updateCommentApproval(
+  token: string,
+  id: number,
+  is_approved: boolean,
+): Promise<ArticleComment> {
+  const res = await fetch(apiUrl(`/api/admin/comments/${id}`), {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(token),
+    },
+    body: JSON.stringify({ is_approved }),
+  });
+  const data = await parseJson<{ comment: ArticleComment }>(res);
+  return data.comment;
+}
+
+export async function deleteAdminCommentApi(
+  token: string,
+  id: number,
+): Promise<void> {
+  const res = await fetch(apiUrl(`/api/admin/comments/${id}`), {
     method: 'DELETE',
     headers: authHeaders(token),
   });

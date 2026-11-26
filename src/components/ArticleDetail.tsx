@@ -1,16 +1,32 @@
 import {
   ArrowLeft,
+  ArrowRight,
   Bookmark,
   Check,
   ChevronLeft,
   ChevronRight,
   Copy,
+  Heart,
+  MapPin,
+  MessageCircle,
+  Navigation,
+  Send,
   Share2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { estimateReadingMinutes, formatThaiDate } from '../lib/format';
-import type { Article, SiteSettings } from '../types/blog';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { likeArticle, submitArticleComment } from '../lib/api';
+import {
+  estimateReadingMinutes,
+  formatThaiDate,
+  isSafeExternalUrl,
+} from '../lib/format';
+import type {
+  Article,
+  ArticleComment,
+  ArticleSummaryNav,
+  SiteSettings,
+} from '../types/blog';
 import {
   extractContentHeadings,
   RichContentRenderer,
@@ -20,11 +36,44 @@ import { SafeImage } from './SafeImage';
 interface ArticleDetailProps {
   article: Article;
   related: Article[];
+  prevArticle: ArticleSummaryNav | null;
+  nextArticle: ArticleSummaryNav | null;
+  initialComments: ArticleComment[];
   settings: SiteSettings;
   isSaved: boolean;
   onToggleSave: (articleId: number) => void;
   onBack: () => void;
   onSelectArticle: (article: Article) => void;
+  onSelectSlug: (slug: string) => void;
+}
+
+const LIKED_ARTICLES_KEY = 'khonneethiao_liked_articles_v1';
+
+function loadLikedArticleIds(): number[] {
+  try {
+    const raw = window.localStorage.getItem(LIKED_ARTICLES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is number => typeof id === 'number' && id > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLikedArticleId(articleId: number) {
+  try {
+    const current = loadLikedArticleIds();
+    if (!current.includes(articleId)) {
+      window.localStorage.setItem(
+        LIKED_ARTICLES_KEY,
+        JSON.stringify([articleId, ...current].slice(0, 200)),
+      );
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
 }
 
 interface LightboxPhoto {
@@ -45,15 +94,43 @@ function setMetaTag(attr: 'name' | 'property', key: string, value: string) {
 export function ArticleDetail({
   article,
   related,
+  prevArticle,
+  nextArticle,
+  initialComments,
   settings,
   isSaved,
   onToggleSave,
   onBack,
   onSelectArticle,
+  onSelectSlug,
 }: ArticleDetailProps) {
   const [copied, setCopied] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [readProgress, setReadProgress] = useState(0);
+
+  // Like / Heart state
+  const [likesCount, setLikesCount] = useState<number>(article.likes_count || 0);
+  const [hasLiked, setHasLiked] = useState<boolean>(() =>
+    loadLikedArticleIds().includes(article.id),
+  );
+  const [liking, setLiking] = useState(false);
+
+  // Reader Comments / Guestbook state
+  const [comments, setComments] = useState<ArticleComment[]>(initialComments);
+  const [commentAuthor, setCommentAuthor] = useState('');
+  const [commentMessage, setCommentMessage] = useState('');
+  const [honeypotWebsite, setHoneypotWebsite] = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [commentSuccess, setCommentSuccess] = useState('');
+  const [commentError, setCommentError] = useState('');
+
+  useEffect(() => {
+    setLikesCount(article.likes_count || 0);
+    setHasLiked(loadLikedArticleIds().includes(article.id));
+    setComments(initialComments);
+    setCommentSuccess('');
+    setCommentError('');
+  }, [article.id, article.likes_count, initialComments]);
 
   const headings = useMemo(
     () => extractContentHeadings(article.content),
@@ -69,26 +146,32 @@ export function ArticleDetail({
     [article.highlights],
   );
 
+  const safeMapsUrl =
+    article.google_maps_url && isSafeExternalUrl(article.google_maps_url)
+      ? article.google_maps_url.trim()
+      : '';
+
   const hasTripGuide = Boolean(
     article.best_season ||
       article.duration ||
       article.budget_estimate ||
-      highlightsList.length > 0,
+      highlightsList.length > 0 ||
+      safeMapsUrl,
   );
 
   // Per-article SEO meta tags + JSON-LD BlogPosting
   useEffect(() => {
     const siteName = settings.site_name || 'ฅนหนีเที่ยว';
-    const pageTitle = `${article.title} | ${siteName}`;
+    const siteNameEn = settings.site_name_en || 'KON NEE TIEW';
     const desc = article.excerpt || `${article.place_name} จังหวัด${article.province}`;
     const canonicalUrl = `${window.location.origin}/article/${encodeURIComponent(article.slug)}`;
     const imageUrl = article.cover_image.startsWith('http')
       ? article.cover_image
       : `${window.location.origin}${article.cover_image}`;
 
-    document.title = pageTitle;
+    document.title = `${siteName} ${siteNameEn}`.trim();
     setMetaTag('name', 'description', desc);
-    setMetaTag('property', 'og:title', pageTitle);
+    setMetaTag('property', 'og:title', `${article.title} | ${siteName}`);
     setMetaTag('property', 'og:description', desc);
     setMetaTag('property', 'og:type', 'article');
     setMetaTag('property', 'og:url', canonicalUrl);
@@ -128,7 +211,7 @@ export function ArticleDetail({
     return () => {
       document.getElementById(scriptId)?.remove();
     };
-  }, [article, settings.site_name]);
+  }, [article, settings.site_name, settings.site_name_en]);
 
   useEffect(() => {
     const updateProgress = () => {
@@ -201,10 +284,11 @@ export function ArticleDetail({
   }, [lightboxIndex, allPhotos.length]);
 
   const shareUrl =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}/article/${encodeURIComponent(article.slug)}`
-      : '';
+    typeof window !== 'undefined' ? window.location.href : '';
   const facebookShareHref = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
+    shareUrl,
+  )}`;
+  const lineShareHref = `https://social-plugins.line.me/lineit/share?url=${encodeURIComponent(
     shareUrl,
   )}`;
 
@@ -215,6 +299,56 @@ export function ArticleDetail({
       window.setTimeout(() => setCopied(false), 2600);
     } catch {
       setCopied(false);
+    }
+  };
+
+  const handleLikeArticle = async () => {
+    if (hasLiked || liking) return;
+    setLiking(true);
+    setHasLiked(true);
+    setLikesCount((prev) => prev + 1);
+    saveLikedArticleId(article.id);
+    try {
+      const res = await likeArticle(article.id);
+      setLikesCount(res.likes_count);
+    } catch {
+      // Keep optimistic count gracefully if offline
+    } finally {
+      setLiking(false);
+    }
+  };
+
+  const handleSubmitComment = async (e: FormEvent) => {
+    e.preventDefault();
+    setCommentError('');
+    setCommentSuccess('');
+    if (commentAuthor.trim().length < 2) {
+      setCommentError('กรุณาระบุชื่อของคุณอย่างน้อย 2 ตัวอักษร');
+      return;
+    }
+    if (commentMessage.trim().length < 4) {
+      setCommentError('กรุณาเขียนข้อความอย่างน้อย 4 ตัวอักษร');
+      return;
+    }
+    setCommentSubmitting(true);
+    try {
+      const res = await submitArticleComment(article.id, {
+        author_name: commentAuthor.trim(),
+        message: commentMessage.trim(),
+        website: honeypotWebsite,
+      });
+      setCommentSuccess(
+        res.message || 'ส่งความคิดเห็นเรียบร้อยแล้ว รอผู้ดูแลตรวจสอบก่อนแสดงผล',
+      );
+      setCommentAuthor('');
+      setCommentMessage('');
+      setHoneypotWebsite('');
+    } catch (err) {
+      setCommentError(
+        err instanceof Error ? err.message : 'ไม่สามารถส่งความคิดเห็นได้ในขณะนี้',
+      );
+    } finally {
+      setCommentSubmitting(false);
     }
   };
 
@@ -234,7 +368,7 @@ export function ArticleDetail({
       </div>
 
       <div className="max-w-[960px] mx-auto px-5 sm:px-8">
-        {/* Top Navigation + Save / Share Actions */}
+        {/* Top Navigation + Save / Like / Share Actions */}
         <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
           <button
             type="button"
@@ -248,8 +382,22 @@ export function ArticleDetail({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
+              onClick={handleLikeArticle}
+              disabled={hasLiked}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
+                hasLiked
+                  ? 'border-[#F3C5D8] bg-[#FEF4F8] text-[#D9437E] cursor-default'
+                  : 'border-[#DCD7CB] bg-white hover:border-[#D9437E] hover:text-[#D9437E] text-[#252525] cursor-pointer'
+              }`}
+            >
+              <Heart className="w-4 h-4" fill={hasLiked ? 'currentColor' : 'none'} />
+              <span className="tabular-nums">{likesCount}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => onToggleSave(article.id)}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-full border text-xs sm:text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${
+              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-full border text-xs sm:text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${
                 isSaved
                   ? 'border-[#F3C5D8] bg-[#FEF4F8] text-[#E94C8A]'
                   : 'border-[#DCD7CB] bg-white hover:border-[#244B3A] text-[#252525]'
@@ -263,10 +411,20 @@ export function ArticleDetail({
             </button>
 
             <a
+              href={lineShareHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-[#C6E5CD] bg-[#F2FBF4] hover:border-[#06C755] text-xs sm:text-sm font-medium text-[#059440] transition-colors whitespace-nowrap"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>แชร์ LINE</span>
+            </a>
+
+            <a
               href={facebookShareHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-[#DCD7CB] bg-white hover:border-[#244B3A] text-xs sm:text-sm font-medium text-[#252525] transition-colors whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-[#DCD7CB] bg-white hover:border-[#244B3A] text-xs sm:text-sm font-medium text-[#252525] transition-colors whitespace-nowrap"
             >
               <Share2 className="w-4 h-4 text-[#244B3A]" />
               <span>แชร์ Facebook</span>
@@ -275,7 +433,7 @@ export function ArticleDetail({
             <button
               type="button"
               onClick={handleCopyLink}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-[#DCD7CB] bg-white hover:border-[#244B3A] text-xs sm:text-sm font-medium text-[#252525] transition-colors cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-[#DCD7CB] bg-white hover:border-[#244B3A] text-xs sm:text-sm font-medium text-[#252525] transition-colors cursor-pointer whitespace-nowrap"
             >
               {copied ? (
                 <>
@@ -398,6 +556,26 @@ export function ArticleDetail({
                 </p>
               </div>
             )}
+
+            {safeMapsUrl && (
+              <div className="px-6 py-4 border-t border-[#EFECE4] bg-white flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs sm:text-sm text-[#4B524B]">
+                  <MapPin className="w-4 h-4 text-[#244B3A] shrink-0" />
+                  <span>
+                    พิกัดการเดินทาง: <strong className="font-medium text-[#252525]">{article.place_name}</strong>
+                  </span>
+                </div>
+                <a
+                  href={safeMapsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#244B3A] hover:bg-[#1B3A2C] text-[#FAFAF7] text-xs sm:text-sm font-medium transition-colors whitespace-nowrap"
+                >
+                  <Navigation className="w-3.5 h-3.5" />
+                  <span>เปิดนำทางใน Google Maps</span>
+                </a>
+              </div>
+            )}
           </section>
         )}
 
@@ -485,17 +663,33 @@ export function ArticleDetail({
           </section>
         )}
 
-        {/* Bottom Share & Save Strip */}
+        {/* Bottom Share, Like & Save Strip */}
         <div className="mt-14 py-7 px-6 sm:px-8 rounded-2xl bg-[#DDE8DD]/45 border border-[#D3DED3] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <p className="font-editorial text-lg font-semibold text-[#252525]">
               ชอบบันทึกการเดินทางนี้ไหม?
             </p>
             <p className="text-sm text-[#4B524B] mt-0.5">
-              เก็บไว้ในรายการทริปที่อยากไป หรือแชร์แรงบันดาลใจให้เพื่อนร่วมทางของคุณ
+              กดหัวใจให้กำลังใจผู้เขียน เก็บไว้ในทริปที่อยากไป หรือแชร์ให้เพื่อนร่วมทาง
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleLikeArticle}
+              disabled={hasLiked}
+              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-full border text-sm font-medium transition-colors whitespace-nowrap ${
+                hasLiked
+                  ? 'border-[#F3C5D8] bg-[#FEF4F8] text-[#D9437E] cursor-default'
+                  : 'border-[#DCD7CB] bg-white hover:border-[#D9437E] hover:text-[#D9437E] text-[#252525] cursor-pointer'
+              }`}
+            >
+              <Heart className="w-4 h-4" fill={hasLiked ? 'currentColor' : 'none'} />
+              <span className="tabular-nums">
+                {hasLiked ? `ถูกใจแล้ว (${likesCount})` : `ถูกใจ (${likesCount})`}
+              </span>
+            </button>
+
             <button
               type="button"
               onClick={() => onToggleSave(article.id)}
@@ -511,6 +705,16 @@ export function ArticleDetail({
               />
               <span>{isSaved ? 'อยู่ในทริปที่อยากไปแล้ว' : 'บันทึกทริปนี้'}</span>
             </button>
+
+            <a
+              href={lineShareHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full border border-[#C6E5CD] bg-[#F2FBF4] hover:border-[#06C755] text-[#059440] text-sm font-medium transition-colors whitespace-nowrap"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>แชร์ LINE</span>
+            </a>
 
             <a
               href={facebookShareHref}
@@ -541,6 +745,214 @@ export function ArticleDetail({
             </button>
           </div>
         </div>
+
+        {/* Previous / Next Article Navigation */}
+        {(prevArticle || nextArticle) && (
+          <nav
+            aria-label="อ่านบทความก่อนหน้าและถัดไป"
+            className="mt-10 grid grid-cols-1 sm:grid-cols-2 gap-4"
+          >
+            {prevArticle ? (
+              <button
+                type="button"
+                onClick={() => onSelectSlug(prevArticle.slug)}
+                className="group text-left p-4 rounded-2xl bg-white border border-[#E5E2DA] hover:border-[#244B3A] transition-colors cursor-pointer flex items-center gap-4"
+              >
+                <div className="w-16 h-16 rounded-xl overflow-hidden bg-[#EAE6DC] shrink-0">
+                  <SafeImage
+                    src={prevArticle.cover_image}
+                    alt={prevArticle.place_name}
+                    fallbackTitle={prevArticle.place_name}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <p className="inline-flex items-center gap-1 text-xs text-[#5C615C]">
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span>เรื่องราวก่อนหน้า</span>
+                  </p>
+                  <p className="mt-1 font-editorial text-base font-semibold text-[#252525] group-hover:text-[#244B3A] line-clamp-1">
+                    {prevArticle.place_name}
+                  </p>
+                  <p className="text-xs text-[#7D827D] truncate">
+                    จังหวัด{prevArticle.province}
+                  </p>
+                </div>
+              </button>
+            ) : (
+              <div className="hidden sm:block" />
+            )}
+
+            {nextArticle && (
+              <button
+                type="button"
+                onClick={() => onSelectSlug(nextArticle.slug)}
+                className="group text-right p-4 rounded-2xl bg-white border border-[#E5E2DA] hover:border-[#244B3A] transition-colors cursor-pointer flex items-center justify-end gap-4"
+              >
+                <div className="min-w-0">
+                  <p className="inline-flex items-center justify-end gap-1 text-xs text-[#5C615C]">
+                    <span>เรื่องราวถัดไป</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </p>
+                  <p className="mt-1 font-editorial text-base font-semibold text-[#252525] group-hover:text-[#244B3A] line-clamp-1">
+                    {nextArticle.place_name}
+                  </p>
+                  <p className="text-xs text-[#7D827D] truncate">
+                    จังหวัด{nextArticle.province}
+                  </p>
+                </div>
+                <div className="w-16 h-16 rounded-xl overflow-hidden bg-[#EAE6DC] shrink-0">
+                  <SafeImage
+                    src={nextArticle.cover_image}
+                    alt={nextArticle.place_name}
+                    fallbackTitle={nextArticle.place_name}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </button>
+            )}
+          </nav>
+        )}
+
+        {/* Reader Comments / Guestbook Section */}
+        <section
+          aria-labelledby="comments-heading"
+          className="mt-16 pt-12 border-t border-[#E5E2DA] max-w-[780px] mx-auto"
+        >
+          <div className="flex items-end justify-between gap-3 mb-6">
+            <div>
+              <p className="text-xs font-medium tracking-[0.18em] text-[#244B3A] mb-1 uppercase">
+                READER GUESTBOOK
+              </p>
+              <h2
+                id="comments-heading"
+                className="font-editorial text-2xl font-semibold text-[#252525]"
+              >
+                ความคิดเห็นจากผู้อ่าน
+              </h2>
+            </div>
+            <span className="text-xs text-[#5C615C] tabular-nums">
+              {comments.length} ความคิดเห็น
+            </span>
+          </div>
+
+          {/* Comment Submission Form */}
+          <form
+            onSubmit={handleSubmitComment}
+            className="bg-white rounded-2xl border border-[#E5E2DA] p-5 sm:p-6 space-y-4"
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="comment-author"
+                  className="block text-xs font-medium text-[#4B524B] mb-1.5"
+                >
+                  ชื่อของคุณ *
+                </label>
+                <input
+                  id="comment-author"
+                  type="text"
+                  required
+                  maxLength={60}
+                  value={commentAuthor}
+                  onChange={(e) => setCommentAuthor(e.target.value)}
+                  placeholder="เช่น ต้นกล้า, นักเดินทาง"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAFAF7] border border-[#E5E2DA] text-sm text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white"
+                />
+              </div>
+
+              {/* Hidden Honeypot Anti-Spam Input */}
+              <div className="hidden" aria-hidden="true">
+                <label htmlFor="comment-website">Website</label>
+                <input
+                  id="comment-website"
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={honeypotWebsite}
+                  onChange={(e) => setHoneypotWebsite(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="comment-message"
+                className="block text-xs font-medium text-[#4B524B] mb-1.5"
+              >
+                ฝากข้อความหรือสอบถามเส้นทาง *
+              </label>
+              <textarea
+                id="comment-message"
+                rows={3}
+                required
+                maxLength={1000}
+                value={commentMessage}
+                onChange={(e) => setCommentMessage(e.target.value)}
+                placeholder="เล่าความประทับใจหรือถามข้อมูลเพิ่มเติมเกี่ยวกับทริปนี้ได้เลย..."
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAFAF7] border border-[#E5E2DA] text-sm text-[#252525] leading-relaxed focus:outline-none focus:border-[#244B3A] focus:bg-white resize-y"
+              />
+            </div>
+
+            {commentError && (
+              <p className="text-xs text-[#9E2A2B] bg-[#FDECEC] border border-[#F5C6C6] rounded-xl px-3.5 py-2.5">
+                {commentError}
+              </p>
+            )}
+            {commentSuccess && (
+              <p className="text-xs text-[#244B3A] bg-[#DDE8DD]/65 border border-[#C7D8C7] rounded-xl px-3.5 py-2.5">
+                {commentSuccess}
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <p className="text-xs text-[#7D827D]">
+                ความคิดเห็นจะแสดงผลหลังจากผู้ดูแลตรวจสอบเรียบร้อยแล้ว
+              </p>
+              <button
+                type="submit"
+                disabled={commentSubmitting}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#244B3A] hover:bg-[#1B3A2C] disabled:opacity-60 text-[#FAFAF7] text-sm font-medium transition-colors cursor-pointer"
+              >
+                <Send className="w-4 h-4" />
+                <span>{commentSubmitting ? 'กำลังส่ง...' : 'ส่งความคิดเห็น'}</span>
+              </button>
+            </div>
+          </form>
+
+          {/* Approved Comments List */}
+          {comments.length > 0 ? (
+            <div className="mt-6 space-y-3.5">
+              {comments.map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-white rounded-2xl border border-[#E5E2DA] p-5"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-8 h-8 rounded-full bg-[#DDE8DD] text-[#244B3A] text-xs font-semibold flex items-center justify-center shrink-0">
+                        {item.author_name.slice(0, 1).toUpperCase()}
+                      </span>
+                      <p className="text-sm font-semibold text-[#252525]">
+                        {item.author_name}
+                      </p>
+                    </div>
+                    <time className="text-xs text-[#7D827D]">
+                      {formatThaiDate(item.created_at)}
+                    </time>
+                  </div>
+                  <p className="mt-3 text-sm text-[#3D423D] leading-relaxed whitespace-pre-line">
+                    {item.message}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-6 text-center text-sm text-[#7D827D] py-6">
+              ยังไม่มีความคิดเห็นในบทความนี้ — มาเป็นคนแรกที่ร่วมพูดคุยกันได้เลย
+            </p>
+          )}
+        </section>
       </div>
 
       {/* Related Articles Section */}

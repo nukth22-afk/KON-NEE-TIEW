@@ -1,4 +1,13 @@
-import { ArrowUpRight, Bookmark, Compass, Search, SlidersHorizontal, X } from 'lucide-react';
+import {
+  ArrowUpRight,
+  Bookmark,
+  Check,
+  Compass,
+  Link2,
+  Search,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchPublishedArticles } from '../lib/api';
 import { formatThaiDate } from '../lib/format';
@@ -14,6 +23,7 @@ import { SafeImage } from './SafeImage';
 interface AllDestinationsPageProps {
   provinces: string[];
   autoFocusSearch?: boolean;
+  queryKey?: string;
   savedIds: Set<number>;
   onToggleSave: (articleId: number) => void;
   onSelectArticle: (article: Article) => void;
@@ -21,18 +31,40 @@ interface AllDestinationsPageProps {
 
 const PAGE_SIZE = 8;
 
+function readFiltersFromUrl(searchStr: string) {
+  const params = new URLSearchParams(searchStr);
+  const q = params.get('q') || '';
+  const rawRegion = params.get('region') || '';
+  const region: ThaiRegion | '' = THAI_REGIONS.includes(rawRegion as ThaiRegion)
+    ? (rawRegion as ThaiRegion)
+    : '';
+  const province = params.get('province') || '';
+  const rawStyle = params.get('style') || '';
+  const style: TravelStyle | '' = TRAVEL_STYLES.includes(rawStyle as TravelStyle)
+    ? (rawStyle as TravelStyle)
+    : '';
+  const sort: 'newest' | 'oldest' =
+    params.get('sort') === 'oldest' ? 'oldest' : 'newest';
+  return { q, region, province, style, sort };
+}
+
 export function AllDestinationsPage({
   provinces,
   autoFocusSearch = false,
+  queryKey = '',
   savedIds,
   onToggleSave,
   onSelectArticle,
 }: AllDestinationsPageProps) {
-  const [search, setSearch] = useState('');
-  const [region, setRegion] = useState<ThaiRegion | ''>('');
-  const [province, setProvince] = useState('');
-  const [style, setStyle] = useState<TravelStyle | ''>('');
-  const [sort, setSort] = useState<'newest' | 'oldest'>('newest');
+  const initial = readFiltersFromUrl(
+    typeof window !== 'undefined' ? window.location.search : '',
+  );
+  const [search, setSearch] = useState(initial.q);
+  const [region, setRegion] = useState<ThaiRegion | ''>(initial.region);
+  const [province, setProvince] = useState(initial.province);
+  const [style, setStyle] = useState<TravelStyle | ''>(initial.style);
+  const [sort, setSort] = useState<'newest' | 'oldest'>(initial.sort);
+  const [copiedUrl, setCopiedUrl] = useState(false);
 
   const [articles, setArticles] = useState<Article[]>([]);
   const [total, setTotal] = useState(0);
@@ -40,6 +72,36 @@ export function AllDestinationsPage({
   const [loadingMore, setLoadingMore] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sync incoming URL search changes (e.g., clicking a province on Thailand map or browser back/forward)
+  useEffect(() => {
+    const next = readFiltersFromUrl(
+      typeof window !== 'undefined' ? window.location.search : '',
+    );
+    setSearch(next.q);
+    setRegion(next.region);
+    setProvince(next.province);
+    setStyle(next.style);
+    setSort(next.sort);
+  }, [queryKey]);
+
+  // Reflect active filter state back to URL query string
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams();
+    if (search.trim()) params.set('q', search.trim());
+    if (region) params.set('region', region);
+    if (province) params.set('province', province);
+    if (style) params.set('style', style);
+    if (sort === 'oldest') params.set('sort', 'oldest');
+
+    const qs = params.toString();
+    const targetUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}`;
+    if (targetUrl !== currentUrl) {
+      window.history.replaceState({}, '', targetUrl);
+    }
+  }, [search, region, province, style, sort]);
 
   useEffect(() => {
     if (autoFocusSearch) {
@@ -97,6 +159,16 @@ export function AllDestinationsPage({
     setProvince('');
     setStyle('');
     setSort('newest');
+  };
+
+  const handleCopyFilteredUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopiedUrl(true);
+      window.setTimeout(() => setCopiedUrl(false), 2400);
+    } catch {
+      setCopiedUrl(false);
+    }
   };
 
   return (
@@ -201,14 +273,34 @@ export function AllDestinationsPage({
               <option value="oldest">เรียงตาม: เก่าสุดก่อน</option>
             </select>
             {hasActiveFilters && (
-              <button
-                type="button"
-                onClick={handleReset}
-                title="ล้างตัวกรองทั้งหมด"
-                className="px-3.5 py-2.5 rounded-xl border border-[#E5E2DA] text-xs font-medium text-[#244B3A] hover:bg-[#DDE8DD]/45 transition-colors cursor-pointer whitespace-nowrap"
-              >
-                ล้างตัวกรอง
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleCopyFilteredUrl}
+                  title="คัดลอกลิงก์ผลการค้นหา"
+                  className="inline-flex items-center gap-1 px-3 py-2.5 rounded-xl border border-[#E5E2DA] text-xs font-medium text-[#244B3A] hover:bg-[#DDE8DD]/45 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  {copiedUrl ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>คัดลอกแล้ว</span>
+                    </>
+                  ) : (
+                    <>
+                      <Link2 className="w-3.5 h-3.5" />
+                      <span>แชร์ลิงก์</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  title="ล้างตัวกรองทั้งหมด"
+                  className="px-3 py-2.5 rounded-xl border border-[#E5E2DA] text-xs font-medium text-[#4B524B] hover:bg-[#F2EFE8] transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  ล้างตัวกรอง
+                </button>
+              </div>
             )}
           </div>
         </div>

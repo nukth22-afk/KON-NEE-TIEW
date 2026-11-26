@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowUp,
   Bold,
+  Clock,
   Eye,
   Heading2,
   Heading3,
@@ -12,9 +13,11 @@ import {
   Link2,
   List,
   ListOrdered,
+  MapPin,
   PenLine,
   Pilcrow,
   Quote,
+  RotateCcw,
   Save,
   Star,
   Trash2,
@@ -22,7 +25,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   createArticle,
   fetchAdminMedia,
@@ -93,6 +96,9 @@ export function ArticleEditor({
     initialArticle?.budget_estimate ?? '',
   );
   const [highlights, setHighlights] = useState(initialArticle?.highlights ?? '');
+  const [googleMapsUrl, setGoogleMapsUrl] = useState(
+    initialArticle?.google_maps_url ?? '',
+  );
   const [isFeatured, setIsFeatured] = useState(initialArticle?.is_featured ?? false);
   const [excerpt, setExcerpt] = useState(initialArticle?.excerpt ?? '');
   const [coverImage, setCoverImage] = useState(initialArticle?.cover_image ?? '');
@@ -103,6 +109,37 @@ export function ArticleEditor({
   const [status, setStatus] = useState<ArticleStatus>(
     initialArticle?.status ?? 'published',
   );
+
+  // Local Auto-Save Draft state
+  const draftStorageKey = useMemo(
+    () => `khonneethiao_article_draft_v1_${initialArticle?.id ?? 'new'}`,
+    [initialArticle?.id],
+  );
+  const [pendingLocalDraft, setPendingLocalDraft] = useState<{
+    savedAt: string;
+    data: {
+      title: string;
+      slug: string;
+      placeName: string;
+      province: string;
+      region: ThaiRegion;
+      travelDate: string;
+      travelStyle: TravelStyle;
+      bestSeason: string;
+      duration: string;
+      budgetEstimate: string;
+      highlights: string;
+      googleMapsUrl: string;
+      isFeatured: boolean;
+      excerpt: string;
+      coverImage: string;
+      content: string;
+      galleryImages: GalleryImage[];
+      status: ArticleStatus;
+    };
+  } | null>(null);
+  const [autoSavedLabel, setAutoSavedLabel] = useState('');
+  const hasHydratedRef = useRef(false);
 
   const [activeTab, setActiveTab] = useState<'write' | 'preview'>('write');
   const [uploadingCover, setUploadingCover] = useState(false);
@@ -119,10 +156,159 @@ export function ArticleEditor({
   const [linkUrl, setLinkUrl] = useState('https://');
   const [linkError, setLinkError] = useState('');
 
+  // Direct external image URL inputs (Cloudinary / ImgBB / GitHub raw)
+  const [coverUrlInput, setCoverUrlInput] = useState('');
+  const [coverUrlError, setCoverUrlError] = useState('');
+  const [galleryUrlInput, setGalleryUrlInput] = useState('');
+  const [galleryUrlError, setGalleryUrlError] = useState('');
+
+  const handleApplyCoverUrl = () => {
+    const trimmed = coverUrlInput.trim();
+    if (!trimmed || !isSafeExternalUrl(trimmed)) {
+      setCoverUrlError('กรุณาวางลิงก์รูปภาพที่ขึ้นต้นด้วย https:// หรือ http://');
+      return;
+    }
+    setCoverImage(trimmed);
+    setCoverUrlInput('');
+    setCoverUrlError('');
+  };
+
+  const handleAddGalleryUrl = () => {
+    const trimmed = galleryUrlInput.trim();
+    if (!trimmed || !isSafeExternalUrl(trimmed)) {
+      setGalleryUrlError('กรุณาวางลิงก์รูปภาพที่ขึ้นต้นด้วย https:// หรือ http://');
+      return;
+    }
+    setGalleryImages((prev) => [...prev, { url: trimmed, caption: '' }]);
+    setGalleryUrlInput('');
+    setGalleryUrlError('');
+  };
+
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const coverInputRef = useRef<HTMLInputElement | null>(null);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
   const inlineImgInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Check for existing unsaved local draft on mount
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(draftStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.savedAt && parsed.data && typeof parsed.data.title === 'string') {
+          const isDifferent =
+            parsed.data.title !== (initialArticle?.title ?? '') ||
+            parsed.data.content !== (initialArticle?.content ?? '') ||
+            parsed.data.placeName !== (initialArticle?.place_name ?? '');
+          if (isDifferent) {
+            setPendingLocalDraft(parsed);
+          }
+        }
+      }
+    } catch {
+      // Ignore malformed draft
+    }
+    hasHydratedRef.current = true;
+  }, [draftStorageKey, initialArticle?.title, initialArticle?.content, initialArticle?.place_name]);
+
+  // Debounced auto-save to localStorage every 2.5 seconds
+  useEffect(() => {
+    if (!hasHydratedRef.current || pendingLocalDraft) return;
+    if (!title.trim() && !content.trim() && !placeName.trim()) return;
+
+    const timer = window.setTimeout(() => {
+      try {
+        const now = new Date();
+        const payload = {
+          savedAt: now.toISOString(),
+          data: {
+            title,
+            slug,
+            placeName,
+            province,
+            region,
+            travelDate,
+            travelStyle,
+            bestSeason,
+            duration,
+            budgetEstimate,
+            highlights,
+            googleMapsUrl,
+            isFeatured,
+            excerpt,
+            coverImage,
+            content,
+            galleryImages,
+            status,
+          },
+        };
+        window.localStorage.setItem(draftStorageKey, JSON.stringify(payload));
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        setAutoSavedLabel(`บันทึกร่างอัตโนมัติ ${hh}:${mm}`);
+      } catch {
+        // Ignore storage quota errors
+      }
+    }, 2500);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    draftStorageKey,
+    pendingLocalDraft,
+    title,
+    slug,
+    placeName,
+    province,
+    region,
+    travelDate,
+    travelStyle,
+    bestSeason,
+    duration,
+    budgetEstimate,
+    highlights,
+    googleMapsUrl,
+    isFeatured,
+    excerpt,
+    coverImage,
+    content,
+    galleryImages,
+    status,
+  ]);
+
+  const handleRestoreLocalDraft = () => {
+    if (!pendingLocalDraft) return;
+    const d = pendingLocalDraft.data;
+    setTitle(d.title);
+    setSlug(d.slug);
+    setSlugTouched(Boolean(d.slug));
+    setPlaceName(d.placeName);
+    setProvince(d.province);
+    setRegion(d.region);
+    setTravelDate(d.travelDate);
+    setTravelStyle(d.travelStyle);
+    setBestSeason(d.bestSeason);
+    setDuration(d.duration);
+    setBudgetEstimate(d.budgetEstimate);
+    setHighlights(d.highlights);
+    setGoogleMapsUrl(d.googleMapsUrl || '');
+    setIsFeatured(d.isFeatured);
+    setExcerpt(d.excerpt);
+    setCoverImage(d.coverImage);
+    setContent(d.content);
+    setGalleryImages(Array.isArray(d.galleryImages) ? d.galleryImages : []);
+    setStatus(d.status);
+    setPendingLocalDraft(null);
+    setAutoSavedLabel('กู้คืนฉบับร่างเรียบร้อย');
+  };
+
+  const handleDiscardLocalDraft = () => {
+    try {
+      window.localStorage.removeItem(draftStorageKey);
+    } catch {
+      // Ignore
+    }
+    setPendingLocalDraft(null);
+  };
 
   useEffect(() => {
     getToken()
@@ -308,6 +494,7 @@ export function ArticleEditor({
         duration: duration.trim(),
         budget_estimate: budgetEstimate.trim(),
         highlights: highlights.trim(),
+        google_maps_url: googleMapsUrl.trim(),
         is_featured: isFeatured,
         excerpt: excerpt.trim(),
         cover_image: coverImage.trim(),
@@ -320,6 +507,12 @@ export function ArticleEditor({
         isEditing && initialArticle
           ? await updateArticle(token, initialArticle.id, payload)
           : await createArticle(token, payload);
+
+      try {
+        window.localStorage.removeItem(draftStorageKey);
+      } catch {
+        // Ignore
+      }
 
       const message = isEditing
         ? `บันทึกการแก้ไขบทความ “${saved.title}” เรียบร้อยแล้ว`
@@ -355,6 +548,12 @@ export function ArticleEditor({
             <h1 className="font-editorial text-base sm:text-lg font-semibold text-[#252525] truncate">
               {isEditing ? 'แก้ไขบทความท่องเที่ยว' : 'เพิ่มบทความท่องเที่ยวใหม่'}
             </h1>
+            {autoSavedLabel && (
+              <span className="hidden md:inline-flex items-center gap-1 text-xs text-[#5C615C] whitespace-nowrap shrink-0">
+                <Clock className="w-3.5 h-3.5 text-[#244B3A]" />
+                <span>{autoSavedLabel}</span>
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
@@ -405,6 +604,34 @@ export function ArticleEditor({
       </header>
 
       <main className="max-w-[1200px] mx-auto px-5 sm:px-8 pt-8">
+        {pendingLocalDraft && (
+          <div className="mb-6 px-4 py-3.5 rounded-xl bg-[#DDE8DD]/60 border border-[#C3D7C3] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 text-sm text-[#244B3A]">
+              <RotateCcw className="w-4 h-4 shrink-0" />
+              <span>
+                พบฉบับร่างที่บันทึกอัตโนมัติไว้เมื่อ{' '}
+                <strong>{formatThaiDate(pendingLocalDraft.savedAt)}</strong> ต้องการกู้คืนหรือไม่?
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleRestoreLocalDraft}
+                className="px-3.5 py-1.5 rounded-lg bg-[#244B3A] hover:bg-[#1B3A2C] text-white text-xs font-medium cursor-pointer"
+              >
+                กู้คืนฉบับร่างนี้
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardLocalDraft}
+                className="px-3 py-1.5 rounded-lg border border-[#B8CEB8] bg-white hover:bg-[#FAFAF7] text-[#4B524B] text-xs font-medium cursor-pointer"
+              >
+                ทิ้งฉบับร่าง
+              </button>
+            </div>
+          </div>
+        )}
+
         {error && (
           <div
             role="alert"
@@ -773,6 +1000,24 @@ export function ArticleEditor({
                     className="w-full px-3.5 py-2.5 rounded-xl border border-[#D8D4C9] bg-[#FAFAF7] text-sm text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white"
                   />
                 </div>
+
+                <div>
+                  <label
+                    htmlFor="field-google-maps"
+                    className="flex items-center gap-1.5 text-xs font-medium text-[#252525] mb-1.5"
+                  >
+                    <MapPin className="w-3.5 h-3.5 text-[#244B3A]" />
+                    <span>ลิงก์พิกัด Google Maps (สำหรับปุ่ม “เปิดนำทางใน Google Maps”)</span>
+                  </label>
+                  <input
+                    id="field-google-maps"
+                    type="url"
+                    value={googleMapsUrl}
+                    onChange={(e) => setGoogleMapsUrl(e.target.value)}
+                    placeholder="https://maps.google.com/... หรือ https://maps.app.goo.gl/..."
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-[#D8D4C9] bg-[#FAFAF7] text-sm text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white"
+                  />
+                </div>
               </section>
 
               {/* Rich Story Editor */}
@@ -1100,10 +1345,49 @@ export function ArticleEditor({
                   onChange={(e) => handleCoverFileChange(e.target.files)}
                 />
 
+                {/* Direct External Cover Image URL */}
+                <div className="mt-3 pt-3 border-t border-[#EFECE4] space-y-1.5">
+                  <label
+                    htmlFor="ed-cover-url"
+                    className="block text-[11px] font-medium text-[#5C615C]"
+                  >
+                    หรือวางลิงก์รูปภาพภายนอก (Cloudinary / ImgBB / URL)
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      id="ed-cover-url"
+                      type="url"
+                      value={coverUrlInput}
+                      onChange={(e) => {
+                        setCoverUrlInput(e.target.value);
+                        if (coverUrlError) setCoverUrlError('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleApplyCoverUrl();
+                        }
+                      }}
+                      placeholder="https://res.cloudinary.com/..."
+                      className="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-[#FAFAF7] border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleApplyCoverUrl}
+                      className="px-3 py-1.5 rounded-lg bg-[#DDE8DD]/80 hover:bg-[#DDE8DD] text-xs font-medium text-[#244B3A] cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      ใช้ลิงก์นี้
+                    </button>
+                  </div>
+                  {coverUrlError && (
+                    <p className="text-[11px] text-[#B82860]">{coverUrlError}</p>
+                  )}
+                </div>
+
                 {showMediaPicker && mediaLibrary.length > 0 && (
                   <div className="mt-4 pt-4 border-t border-[#EFECE4]">
                     <p className="text-xs font-medium text-[#5C615C] mb-2.5">
-                      รูปภาพที่เคยอัปโหลดไว้ ({mediaLibrary.length})
+                      รูปภาพในคลังสื่อ ({mediaLibrary.length})
                     </p>
                     <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
                       {mediaLibrary.map((item) => (
@@ -1114,7 +1398,9 @@ export function ArticleEditor({
                             setCoverImage(item.url);
                             setShowMediaPicker(false);
                           }}
-                          title={`${item.original_name} (${formatFileSize(item.size)})`}
+                          title={`${item.original_name} (${
+                            item.size > 0 ? formatFileSize(item.size) : 'ลิงก์ภายนอก'
+                          })`}
                           className="aspect-square rounded-lg overflow-hidden border border-[#E5E2DA] hover:border-[#244B3A] cursor-pointer"
                         >
                           <SafeImage
@@ -1166,6 +1452,45 @@ export function ArticleEditor({
                   className="hidden"
                   onChange={(e) => handleGalleryFileChange(e.target.files)}
                 />
+
+                {/* Direct External Gallery Image URL */}
+                <div className="mt-3 pt-3 border-t border-[#EFECE4] space-y-1.5">
+                  <label
+                    htmlFor="ed-gallery-url"
+                    className="block text-[11px] font-medium text-[#5C615C]"
+                  >
+                    หรือเพิ่มรูปเข้าอัลบั้มจากลิงก์ URL
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      id="ed-gallery-url"
+                      type="url"
+                      value={galleryUrlInput}
+                      onChange={(e) => {
+                        setGalleryUrlInput(e.target.value);
+                        if (galleryUrlError) setGalleryUrlError('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddGalleryUrl();
+                        }
+                      }}
+                      placeholder="https://res.cloudinary.com/..."
+                      className="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-[#FAFAF7] border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddGalleryUrl}
+                      className="px-3 py-1.5 rounded-lg bg-[#DDE8DD]/80 hover:bg-[#DDE8DD] text-xs font-medium text-[#244B3A] cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      เพิ่มรูป
+                    </button>
+                  </div>
+                  {galleryUrlError && (
+                    <p className="text-[11px] text-[#B82860]">{galleryUrlError}</p>
+                  )}
+                </div>
 
                 {galleryImages.length > 0 && (
                   <div className="mt-4 space-y-3 max-h-[420px] overflow-y-auto pr-1">
