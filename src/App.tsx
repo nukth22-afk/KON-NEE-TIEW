@@ -27,7 +27,6 @@ import {
   DEFAULT_SITE_SETTINGS,
   type AdminUser,
   type Article,
-  type ArticleComment,
   type ArticleSummaryNav,
   type SiteOverview,
   type SiteSettings,
@@ -114,7 +113,6 @@ export default function App() {
   const [relatedArticles, setRelatedArticles] = useState<Article[]>([]);
   const [prevArticle, setPrevArticle] = useState<ArticleSummaryNav | null>(null);
   const [nextArticle, setNextArticle] = useState<ArticleSummaryNav | null>(null);
-  const [articleComments, setArticleComments] = useState<ArticleComment[]>([]);
   const [articleLoading, setArticleLoading] = useState(false);
   const [articleError, setArticleError] = useState('');
 
@@ -255,13 +253,12 @@ export default function App() {
     setArticleLoading(true);
     setArticleError('');
     fetchArticleDetail(route.slug)
-      .then(({ article, related, prevArticle: prev, nextArticle: next, comments }) => {
+      .then(({ article, related, prevArticle: prev, nextArticle: next }) => {
         if (!active) return;
         setCurrentArticle(article);
         setRelatedArticles(related);
         setPrevArticle(prev);
         setNextArticle(next);
-        setArticleComments(comments);
       })
       .catch((err) => {
         if (!active) return;
@@ -269,7 +266,6 @@ export default function App() {
         setRelatedArticles([]);
         setPrevArticle(null);
         setNextArticle(null);
-        setArticleComments([]);
         setArticleError(
           err instanceof Error ? err.message : 'ไม่พบบทความท่องเที่ยวที่ต้องการ',
         );
@@ -551,7 +547,6 @@ export default function App() {
             related={relatedArticles}
             prevArticle={prevArticle}
             nextArticle={nextArticle}
-            initialComments={articleComments}
             settings={siteSettings}
             isSaved={savedIds.has(currentArticle.id)}
             onToggleSave={toggleSaveTrip}

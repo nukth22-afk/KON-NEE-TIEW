@@ -10,12 +10,11 @@ import {
   MapPin,
   MessageCircle,
   Navigation,
-  Send,
   Share2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { likeArticle, submitArticleComment } from '../lib/api';
+import { useEffect, useMemo, useState } from 'react';
+import { likeArticle } from '../lib/api';
 import {
   estimateReadingMinutes,
   formatThaiDate,
@@ -23,7 +22,6 @@ import {
 } from '../lib/format';
 import type {
   Article,
-  ArticleComment,
   ArticleSummaryNav,
   SiteSettings,
 } from '../types/blog';
@@ -38,7 +36,6 @@ interface ArticleDetailProps {
   related: Article[];
   prevArticle: ArticleSummaryNav | null;
   nextArticle: ArticleSummaryNav | null;
-  initialComments: ArticleComment[];
   settings: SiteSettings;
   isSaved: boolean;
   onToggleSave: (articleId: number) => void;
@@ -96,7 +93,6 @@ export function ArticleDetail({
   related,
   prevArticle,
   nextArticle,
-  initialComments,
   settings,
   isSaved,
   onToggleSave,
@@ -115,22 +111,10 @@ export function ArticleDetail({
   );
   const [liking, setLiking] = useState(false);
 
-  // Reader Comments / Guestbook state
-  const [comments, setComments] = useState<ArticleComment[]>(initialComments);
-  const [commentAuthor, setCommentAuthor] = useState('');
-  const [commentMessage, setCommentMessage] = useState('');
-  const [honeypotWebsite, setHoneypotWebsite] = useState('');
-  const [commentSubmitting, setCommentSubmitting] = useState(false);
-  const [commentSuccess, setCommentSuccess] = useState('');
-  const [commentError, setCommentError] = useState('');
-
   useEffect(() => {
     setLikesCount(article.likes_count || 0);
     setHasLiked(loadLikedArticleIds().includes(article.id));
-    setComments(initialComments);
-    setCommentSuccess('');
-    setCommentError('');
-  }, [article.id, article.likes_count, initialComments]);
+  }, [article.id, article.likes_count]);
 
   const headings = useMemo(
     () => extractContentHeadings(article.content),
@@ -328,40 +312,6 @@ export function ArticleDetail({
       // Keep optimistic count gracefully if offline
     } finally {
       setLiking(false);
-    }
-  };
-
-  const handleSubmitComment = async (e: FormEvent) => {
-    e.preventDefault();
-    setCommentError('');
-    setCommentSuccess('');
-    if (commentAuthor.trim().length < 2) {
-      setCommentError('กรุณาระบุชื่อของคุณอย่างน้อย 2 ตัวอักษร');
-      return;
-    }
-    if (commentMessage.trim().length < 4) {
-      setCommentError('กรุณาเขียนข้อความอย่างน้อย 4 ตัวอักษร');
-      return;
-    }
-    setCommentSubmitting(true);
-    try {
-      const res = await submitArticleComment(article.id, {
-        author_name: commentAuthor.trim(),
-        message: commentMessage.trim(),
-        website: honeypotWebsite,
-      });
-      setCommentSuccess(
-        res.message || 'ส่งความคิดเห็นเรียบร้อยแล้ว รอผู้ดูแลตรวจสอบก่อนแสดงผล',
-      );
-      setCommentAuthor('');
-      setCommentMessage('');
-      setHoneypotWebsite('');
-    } catch (err) {
-      setCommentError(
-        err instanceof Error ? err.message : 'ไม่สามารถส่งความคิดเห็นได้ในขณะนี้',
-      );
-    } finally {
-      setCommentSubmitting(false);
     }
   };
 
@@ -827,145 +777,6 @@ export function ArticleDetail({
           </nav>
         )}
 
-        {/* Reader Comments / Guestbook Section */}
-        <section
-          aria-labelledby="comments-heading"
-          className="mt-16 pt-12 border-t border-[#E5E2DA] max-w-[780px] mx-auto"
-        >
-          <div className="flex items-end justify-between gap-3 mb-6">
-            <div>
-              <p className="text-xs font-medium tracking-[0.18em] text-[#244B3A] mb-1 uppercase">
-                READER GUESTBOOK
-              </p>
-              <h2
-                id="comments-heading"
-                className="font-editorial text-2xl font-semibold text-[#252525]"
-              >
-                ความคิดเห็นจากผู้อ่าน
-              </h2>
-            </div>
-            <span className="text-xs text-[#5C615C] tabular-nums">
-              {comments.length} ความคิดเห็น
-            </span>
-          </div>
-
-          {/* Comment Submission Form */}
-          <form
-            onSubmit={handleSubmitComment}
-            className="bg-white rounded-2xl border border-[#E5E2DA] p-5 sm:p-6 space-y-4"
-          >
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label
-                  htmlFor="comment-author"
-                  className="block text-xs font-medium text-[#4B524B] mb-1.5"
-                >
-                  ชื่อของคุณ *
-                </label>
-                <input
-                  id="comment-author"
-                  type="text"
-                  required
-                  maxLength={60}
-                  value={commentAuthor}
-                  onChange={(e) => setCommentAuthor(e.target.value)}
-                  placeholder="เช่น ต้นกล้า, นักเดินทาง"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAFAF7] border border-[#E5E2DA] text-sm text-[#252525] focus:outline-none focus:border-[#244B3A] focus:bg-white"
-                />
-              </div>
-
-              {/* Hidden Honeypot Anti-Spam Input */}
-              <div className="hidden" aria-hidden="true">
-                <label htmlFor="comment-website">Website</label>
-                <input
-                  id="comment-website"
-                  type="text"
-                  tabIndex={-1}
-                  autoComplete="off"
-                  value={honeypotWebsite}
-                  onChange={(e) => setHoneypotWebsite(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label
-                htmlFor="comment-message"
-                className="block text-xs font-medium text-[#4B524B] mb-1.5"
-              >
-                ฝากข้อความหรือสอบถามเส้นทาง *
-              </label>
-              <textarea
-                id="comment-message"
-                rows={3}
-                required
-                maxLength={1000}
-                value={commentMessage}
-                onChange={(e) => setCommentMessage(e.target.value)}
-                placeholder="เล่าความประทับใจหรือถามข้อมูลเพิ่มเติมเกี่ยวกับทริปนี้ได้เลย..."
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAFAF7] border border-[#E5E2DA] text-sm text-[#252525] leading-relaxed focus:outline-none focus:border-[#244B3A] focus:bg-white resize-y"
-              />
-            </div>
-
-            {commentError && (
-              <p className="text-xs text-[#9E2A2B] bg-[#FDECEC] border border-[#F5C6C6] rounded-xl px-3.5 py-2.5">
-                {commentError}
-              </p>
-            )}
-            {commentSuccess && (
-              <p className="text-xs text-[#244B3A] bg-[#DDE8DD]/65 border border-[#C7D8C7] rounded-xl px-3.5 py-2.5">
-                {commentSuccess}
-              </p>
-            )}
-
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-              <p className="text-xs text-[#7D827D]">
-                ความคิดเห็นจะแสดงผลหลังจากผู้ดูแลตรวจสอบเรียบร้อยแล้ว
-              </p>
-              <button
-                type="submit"
-                disabled={commentSubmitting}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#244B3A] hover:bg-[#1B3A2C] disabled:opacity-60 text-[#FAFAF7] text-sm font-medium transition-colors cursor-pointer"
-              >
-                <Send className="w-4 h-4" />
-                <span>{commentSubmitting ? 'กำลังส่ง...' : 'ส่งความคิดเห็น'}</span>
-              </button>
-            </div>
-          </form>
-
-          {/* Approved Comments List */}
-          {comments.length > 0 ? (
-            <div className="mt-6 space-y-3.5">
-              {comments.map((item) => (
-                <div
-                  key={item.id}
-                  className="bg-white rounded-2xl border border-[#E5E2DA] p-5"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5">
-                      <span className="w-8 h-8 rounded-full bg-[#DDE8DD] text-[#244B3A] text-xs font-semibold flex items-center justify-center shrink-0">
-                        {item.author_name.slice(0, 1).toUpperCase()}
-                      </span>
-                      <p className="text-sm font-semibold text-[#252525]">
-                        {item.author_name}
-                      </p>
-                    </div>
-                    <time className="text-xs text-[#7D827D]">
-                      {formatThaiDate(item.created_at)}
-                    </time>
-                  </div>
-                  <p className="mt-3 text-sm text-[#3D423D] leading-relaxed whitespace-pre-line">
-                    {item.message}
-                  </p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-6 text-center text-sm text-[#7D827D] py-6">
-              ยังไม่มีความคิดเห็นในบทความนี้ — มาเป็นคนแรกที่ร่วมพูดคุยกันได้เลย
-            </p>
-          )}
-        </section>
       </div>
 
       {/* Related Articles Section */}

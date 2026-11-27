@@ -388,13 +388,6 @@ export function AdminDashboard({
   }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'articles', label: 'จัดการบทความ', icon: FileText, badge: articles.length },
-    {
-      id: 'comments',
-      label: 'จัดการความคิดเห็น',
-      icon: MessageSquare,
-      badge: pendingCommentsCount > 0 ? pendingCommentsCount : comments.length,
-      highlightBadge: pendingCommentsCount > 0,
-    },
     { id: 'regions', label: 'จัดการหมวดหมู่/ภูมิภาค', icon: Compass },
     { id: 'media', label: 'คลังรูปภาพ', icon: Images, badge: media.length },
     { id: 'settings', label: 'ตั้งค่าเว็บไซต์', icon: Settings },
