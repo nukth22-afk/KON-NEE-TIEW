@@ -38,7 +38,11 @@ export function estimateReadingMinutes(content: string): number {
 export function isSafeImageUrl(url: string): boolean {
   const trimmed = url.trim();
   if (!trimmed) return false;
-  if (trimmed.startsWith('/uploads/') || trimmed.startsWith('/src/assets/images/')) {
+  if (
+    trimmed.startsWith('/uploads/') ||
+    trimmed.startsWith('/src/assets/images/') ||
+    trimmed.startsWith('/assets/')
+  ) {
     return !trimmed.includes('..');
   }
   try {

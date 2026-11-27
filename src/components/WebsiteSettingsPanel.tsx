@@ -180,15 +180,19 @@ export function WebsiteSettingsPanel({
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center gap-4 pt-2">
-          <div className="w-16 h-16 rounded-full border border-[#E5E2DA] bg-[#FAFAF7] overflow-hidden flex items-center justify-center shrink-0">
+          <div className="w-16 h-16 rounded-full border border-[#E5E2DA] bg-[#FAFAF7] overflow-hidden flex items-center justify-center shrink-0 p-2">
             {form.logo_url ? (
               <SafeImage
                 src={form.logo_url}
                 alt="โลโก้เว็บไซต์"
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain rounded-full"
               />
             ) : (
-              <span className="text-xs text-[#7D827D]">ค่าเริ่มต้น</span>
+              <SafeImage
+                src="/assets/aistudio/iconKONs_a4fc2101.png"
+                alt="โลโก้ค่าเริ่มต้น ฅนหนีเที่ยว"
+                className="w-full h-full object-contain"
+              />
             )}
           </div>
           <div className="flex-1 min-w-0 space-y-2">

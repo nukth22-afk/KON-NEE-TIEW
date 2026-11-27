@@ -419,12 +419,10 @@ export default function App() {
       <Navbar
         settings={siteSettings}
         activeRoute={activeNavRoute}
-        isAdminLoggedIn={Boolean(adminUser)}
         onGoHome={handleGoHome}
         onGoDestinations={handleGoDestinations}
         onGoAbout={handleGoAbout}
         onScrollToRegions={() => handleScrollToSection('destination-by-region')}
-        onOpenAdmin={handleOpenAdmin}
       />
 
       <main className="flex-1">

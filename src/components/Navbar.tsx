@@ -6,44 +6,33 @@ import { SafeImage } from './SafeImage';
 interface NavbarProps {
   settings: SiteSettings;
   activeRoute: 'home' | 'destinations' | 'about' | 'article';
-  isAdminLoggedIn: boolean;
   onGoHome: () => void;
   onGoDestinations: (focusSearch?: boolean) => void;
   onGoAbout: () => void;
   onScrollToRegions: () => void;
-  onOpenAdmin: () => void;
 }
 
-function BrandMark({ solid }: { solid: boolean }) {
+const DEFAULT_BRAND_LOGO_LIGHT = '/assets/aistudio/iconKON_4db00c5f.png';
+const DEFAULT_BRAND_LOGO_DARK = '/assets/aistudio/iconKONs_a4fc2101.png';
+
+function BrandMark({ solid, alt }: { solid: boolean; alt: string }) {
   return (
-    <svg
-      width="24"
-      height="24"
-      viewBox="0 0 28 28"
-      fill="none"
-      aria-hidden="true"
-      className={`shrink-0 transition-colors ${solid ? 'text-[#244B3A]' : 'text-white'}`}
-    >
-      <path
-        d="M3.5 21.5L11.2 8.8L16.3 16.5L19.4 12.2L24.5 21.5H3.5Z"
-        stroke="currentColor"
-        strokeWidth="1.9"
-        strokeLinejoin="round"
-      />
-      <circle cx="20.5" cy="7.5" r="2" fill="currentColor" />
-    </svg>
+    <SafeImage
+      src={solid ? DEFAULT_BRAND_LOGO_DARK : DEFAULT_BRAND_LOGO_LIGHT}
+      alt={alt}
+      loading="eager"
+      className="w-10 h-10 sm:w-11 sm:h-11 object-contain shrink-0 transition-opacity duration-200"
+    />
   );
 }
 
 export function Navbar({
   settings,
   activeRoute,
-  isAdminLoggedIn,
   onGoHome,
   onGoDestinations,
   onGoAbout,
   onScrollToRegions,
-  onOpenAdmin,
 }: NavbarProps) {
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -94,11 +83,12 @@ export function Navbar({
           {settings.logo_url ? (
             <SafeImage
               src={settings.logo_url}
-              alt={settings.site_name}
-              className="w-7 h-7 rounded-full object-cover"
+              alt={settings.site_name || 'ฅนหนีเที่ยว'}
+              loading="eager"
+              className="w-8 h-8 rounded-full object-cover"
             />
           ) : (
-            <BrandMark solid={solidHeader} />
+            <BrandMark solid={solidHeader} alt={settings.site_name || 'ฅนหนีเที่ยว'} />
           )}
           <span className="font-editorial text-xl sm:text-2xl font-semibold tracking-tight">
             {settings.site_name || 'ฅนหนีเที่ยว'}
@@ -148,21 +138,6 @@ export function Navbar({
           </button>
         </nav>
 
-        {/* Zone 3: Single primary action */}
-        <div className="hidden md:flex items-center shrink-0">
-          <button
-            type="button"
-            onClick={() => handleNavClick(onOpenAdmin)}
-            className={`px-4 py-2 text-xs font-medium rounded-full transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#244B3A] ${
-              solidHeader
-                ? 'bg-[#244B3A] text-[#FAFAF7] hover:bg-[#1B3A2C]'
-                : 'bg-white/15 hover:bg-white/25 text-white border border-white/35 backdrop-blur-sm'
-            }`}
-          >
-            {isAdminLoggedIn ? 'แดชบอร์ดผู้ดูแล' : 'เข้าสู่ระบบผู้ดูแล'}
-          </button>
-        </div>
-
         {/* Mobile menu trigger */}
         <button
           type="button"
@@ -209,17 +184,10 @@ export function Navbar({
             <button
               type="button"
               onClick={() => handleNavClick(() => onGoDestinations(true))}
-              className="text-left py-3 px-2 text-base font-medium border-b border-[#E5E2DA]/60 inline-flex items-center gap-2"
+              className="text-left py-3 px-2 text-base font-medium inline-flex items-center gap-2"
             >
               <Search className="w-4 h-4 text-[#244B3A]" />
               <span>ค้นหาสถานที่ท่องเที่ยว</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleNavClick(onOpenAdmin)}
-              className="mt-3 w-full py-3 px-4 rounded-full bg-[#244B3A] text-[#FAFAF7] text-sm font-medium text-center"
-            >
-              {isAdminLoggedIn ? 'แดชบอร์ดผู้ดูแล' : 'เข้าสู่ระบบผู้ดูแล'}
             </button>
           </nav>
         </div>

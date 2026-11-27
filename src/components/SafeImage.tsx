@@ -48,7 +48,10 @@ export function SafeImage({
   let resolvedSrc = src;
   if (apiBase && src.startsWith('/uploads/')) {
     resolvedSrc = `${apiBase}${src}`;
-  } else if (basePrefix && src.startsWith('/src/assets/images/')) {
+  } else if (
+    basePrefix &&
+    (src.startsWith('/src/assets/images/') || src.startsWith('/assets/'))
+  ) {
     resolvedSrc = `${basePrefix}${src}`;
   }
 
