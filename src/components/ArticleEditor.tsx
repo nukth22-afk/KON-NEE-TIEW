@@ -4,8 +4,10 @@ import {
   ArrowLeft,
   ArrowUp,
   Bold,
+  CalendarPlus,
   Clock,
   Eye,
+  FileSpreadsheet,
   Heading2,
   Heading3,
   ImagePlus,
@@ -14,6 +16,7 @@ import {
   List,
   ListOrdered,
   MapPin,
+  MapPinned,
   PenLine,
   Pilcrow,
   Quote,
@@ -155,6 +158,26 @@ export function ArticleEditor({
   const [linkLabel, setLinkLabel] = useState('');
   const [linkUrl, setLinkUrl] = useState('https://');
   const [linkError, setLinkError] = useState('');
+
+  // Inline multi-URL image inserter popover
+  const [showImageUrlBox, setShowImageUrlBox] = useState(false);
+  const [inlineImageUrlsText, setInlineImageUrlsText] = useState('');
+  const [inlineImageCaption, setInlineImageCaption] = useState('');
+  const [inlineImageUrlError, setInlineImageUrlError] = useState('');
+
+  // Structured Place Info Card builder popover
+  const [showPlaceCardBox, setShowPlaceCardBox] = useState(false);
+  const [placeCardName, setPlaceCardName] = useState('');
+  const [placeCardAddress, setPlaceCardAddress] = useState('');
+  const [placeCardHours, setPlaceCardHours] = useState('');
+  const [placeCardFee, setPlaceCardFee] = useState('');
+  const [placeCardPhone, setPlaceCardPhone] = useState('');
+  const [placeCardSocial, setPlaceCardSocial] = useState('');
+  const [placeCardMaps, setPlaceCardMaps] = useState('');
+  const [placeCardError, setPlaceCardError] = useState('');
+
+  // Multi-day trip template confirmation (no window.confirm)
+  const [confirmTemplateReplace, setConfirmTemplateReplace] = useState(false);
 
   // Direct external image URL inputs (Cloudinary / ImgBB / GitHub raw)
   const [coverUrlInput, setCoverUrlInput] = useState('');
@@ -409,11 +432,12 @@ export function ArticleEditor({
     setError('');
     try {
       const token = await getToken();
-      const uploaded = await uploadImages(token, [files[0]]);
-      if (uploaded[0]) {
-        const caption = placeName.trim() || 'บรรยากาศระหว่างการเดินทาง';
-        insertAtCursor(`\n\n![${caption}](${uploaded[0].url})\n\n`);
-        setMediaLibrary((prev) => [uploaded[0], ...prev]);
+      const uploaded = await uploadImages(token, files);
+      if (uploaded.length > 0) {
+        const caption = uploaded.length === 1 ? placeName.trim() || '' : '';
+        const mdLines = uploaded.map((asset) => `![${caption}](${asset.url})`).join('\n');
+        insertAtCursor(`\n\n${mdLines}\n\n`);
+        setMediaLibrary((prev) => [...uploaded, ...prev]);
       }
     } catch (err) {
       setError(
@@ -423,6 +447,134 @@ export function ArticleEditor({
       setUploadingInline(false);
       if (inlineImgInputRef.current) inlineImgInputRef.current.value = '';
     }
+  };
+
+  const handleInsertNextDayHeading = () => {
+    const matches = content.match(/^##\s*(?:Day\s*\d+|วันที่\s*\d+)/gim);
+    const nextDay = (matches ? matches.length : 0) + 1;
+    insertAtCursor(`\n\n## Day ${nextDay} : `, '\n\n', 'หัวข้อกิจกรรมวันนี้');
+  };
+
+  const handleConfirmInsertImageUrls = () => {
+    setInlineImageUrlError('');
+    const rawLines = inlineImageUrlsText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (rawLines.length === 0) {
+      setInlineImageUrlError('กรุณาวางลิงก์รูปภาพอย่างน้อย 1 ลิงก์');
+      return;
+    }
+    for (const url of rawLines) {
+      if (!isSafeExternalUrl(url)) {
+        setInlineImageUrlError('ทุกลิงก์ต้องขึ้นต้นด้วย https:// หรือ http://');
+        return;
+      }
+    }
+    const caption = inlineImageCaption.trim();
+    const mdLines = rawLines
+      .map((url, idx) => `![${rawLines.length === 1 ? caption : idx === 0 ? caption : ''}](${url})`)
+      .join('\n');
+    insertAtCursor(`\n\n${mdLines}\n\n`);
+    setInlineImageUrlsText('');
+    setInlineImageCaption('');
+    setShowImageUrlBox(false);
+  };
+
+  const handleConfirmInsertPlaceCard = () => {
+    setPlaceCardError('');
+    const name = placeCardName.trim();
+    if (!name) {
+      setPlaceCardError('กรุณาระบุชื่อสถานที่ / ร้าน / คาเฟ่ / วัด / ที่พัก');
+      return;
+    }
+    if (placeCardMaps.trim() && !isSafeExternalUrl(placeCardMaps.trim())) {
+      setPlaceCardError('ลิงก์พิกัด GPS ต้องขึ้นต้นด้วย https:// หรือ http://');
+      return;
+    }
+
+    const cardLines: string[] = [':::place', `ชื่อสถานที่ : ${name}`];
+    if (placeCardAddress.trim()) cardLines.push(`ที่ตั้ง : ${placeCardAddress.trim()}`);
+    if (placeCardHours.trim()) cardLines.push(`เปิด-ปิด : ${placeCardHours.trim()}`);
+    if (placeCardFee.trim()) cardLines.push(`ค่าเข้า : ${placeCardFee.trim()}`);
+    if (placeCardPhone.trim()) cardLines.push(`โทรศัพท์ : ${placeCardPhone.trim()}`);
+    if (placeCardSocial.trim()) cardLines.push(`Facebook : ${placeCardSocial.trim()}`);
+    if (placeCardMaps.trim()) cardLines.push(`พิกัด GPS : ${placeCardMaps.trim()}`);
+    cardLines.push(':::');
+
+    insertAtCursor(`\n\n${cardLines.join('\n')}\n\n`);
+    setPlaceCardName('');
+    setPlaceCardAddress('');
+    setPlaceCardHours('');
+    setPlaceCardFee('');
+    setPlaceCardPhone('');
+    setPlaceCardSocial('');
+    setPlaceCardMaps('');
+    setShowPlaceCardBox(false);
+  };
+
+  const applyMultiDayTripTemplate = () => {
+    const template = `สวัสดีครับเพื่อน ๆ ทริปนี้เราจะพาไปเที่ยวชิล ๆ กันแบบครบรส ทั้งไหว้พระทำบุญ คาเฟ่น่ารัก ร้านอาหารอร่อย และจุดเช็คอินยอดฮิต พร้อมแล้วออกเดินทางกันเลยครับ
+
+## Day 1 : เริ่มต้นทริป เช็คอินคาเฟ่ ไหว้พระ และเดินเล่นยามเย็น
+
+ออกเดินทางกันแต่เช้า เมื่อถึงจุดหมายแล้วก็แวะเติมพลังและเช็คอินกันที่จุดแรกเลย
+
+### ชื่อคาเฟ่หรือจุดเช็คอินที่ 1
+
+เล่าบรรยากาศร้าน มุมถ่ายรูป หรือเมนูประทับใจที่นี่... (สามารถกดปุ่ม "แทรกรูปจาก URL" ด้านบนเพื่อวางรูป 2–4 รูปเรียงเป็นกริดสวย ๆ ได้เลย)
+
+:::place
+ชื่อสถานที่ : ชื่อคาเฟ่ / ร้านอาหาร
+ที่ตั้ง : ถนน / ตำบล / อำเภอ / จังหวัด
+เปิด-ปิด : 09.00 - 18.00 น.
+โทรศัพท์ : 08x-xxx-xxxx
+Facebook : ชื่อเพจหรือลิงก์ Facebook
+พิกัด GPS : https://maps.google.com/
+:::
+
+### ชื่อวัดหรือสถานที่ท่องเที่ยวที่ 2
+
+เล่าเรื่องราว ประวัติ หรือความประทับใจของสถานที่นี้...
+
+:::place
+ชื่อสถานที่ : ชื่อสถานที่ท่องเที่ยว
+ที่ตั้ง : ที่อยู่สถานที่
+เปิด-ปิด : 06.00 - 17.00 น.
+พิกัด GPS : https://maps.google.com/
+:::
+
+## Day 2 : ตะลุยจุดเช็คอินยอดฮิตและร้านอาหารพื้นเมือง
+
+### ชื่อสถานที่ / สวนดอกไม้ / ร้านอร่อย
+
+เล่าบรรยากาศและเมนูแนะนำในวันที่สอง...
+
+:::place
+ชื่อสถานที่ : ชื่อสถานที่ท่องเที่ยว
+ที่ตั้ง : ที่อยู่สถานที่
+ค่าเข้า : 60 บาท
+เปิด-ปิด : 08.00 - 20.00 น.
+โทรศัพท์ : 09x-xxx-xxxx
+พิกัด GPS : https://maps.google.com/
+:::
+
+## Day 3 : ไหว้พระขอพรก่อนเดินทางกลับ
+
+เช้าวันสุดท้ายหลังอาหารเช้า แวะไหว้พระขอพรเอาฤกษ์เอาชัยก่อนเดินทางกลับบ้าน
+
+:::place
+ชื่อสถานที่ : ชื่อวัด / จุดแวะสุดท้าย
+ที่ตั้ง : ที่อยู่สถานที่
+เปิด-ปิด : 06.00 - 18.00 น.
+พิกัด GPS : https://maps.google.com/
+:::
+
+จบทริปแบบอิ่มใจและประทับใจสุด ๆ ใครกำลังมองหาแพลนเที่ยวชิล ๆ ลองนำเส้นทางนี้ไปปรับใช้กันได้เลยครับ`;
+
+    setContent(template);
+    if (!duration.trim()) setDuration('3 วัน 2 คืน');
+    setConfirmTemplateReplace(false);
   };
 
   const updateGalleryCaption = (index: number, caption: string) => {
@@ -1023,16 +1175,86 @@ export function ArticleEditor({
               {/* Rich Story Editor */}
               <section className="bg-white rounded-2xl border border-[#E5E2DA] overflow-hidden">
                 <div className="px-6 py-4 border-b border-[#EFECE4] flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="font-editorial text-lg font-semibold text-[#252525]">
-                    เนื้อหาเรื่องราวการเดินทาง *
-                  </h2>
-                  <span className="text-xs text-[#7D827D]">
-                    ใช้หัวข้อ (H2) เพื่อสร้างสารบัญอัตโนมัติในหน้าอ่านบทความ
-                  </span>
+                  <div>
+                    <h2 className="font-editorial text-lg font-semibold text-[#252525]">
+                      เนื้อหาเรื่องราวการเดินทาง *
+                    </h2>
+                    <p className="text-xs text-[#7D827D] mt-0.5">
+                      ใช้หัวข้อ Day / H2 เพื่อสร้างสารบัญอัตโนมัติ และวางรูปติดกัน 2–4 รูปเพื่อจัดเป็นกริดอัตโนมัติ
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (content.trim()) {
+                        setConfirmTemplateReplace(true);
+                      } else {
+                        applyMultiDayTripTemplate();
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#DCD7CB] bg-[#FAFAF7] hover:bg-[#DDE8DD]/60 hover:border-[#B8D1B8] text-xs font-medium text-[#244B3A] transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    <span>ใช้โครงร่างทริป (Day 1–3)</span>
+                  </button>
                 </div>
+
+                {confirmTemplateReplace && (
+                  <div className="px-5 py-3 bg-[#FDF8EC] border-b border-[#E6C98B] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-[#6B4E16]">
+                    <span>
+                      เนื้อหาเดิมในกล่องจะถูกแทนที่ด้วยโครงร่างทริป 3 วัน 2 คืน ต้องการดำเนินการต่อหรือไม่?
+                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={applyMultiDayTripTemplate}
+                        className="px-3 py-1.5 rounded-lg bg-[#244B3A] text-white font-medium hover:bg-[#1B3A2C] cursor-pointer"
+                      >
+                        ยืนยันใช้โครงร่าง
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmTemplateReplace(false)}
+                        className="px-3 py-1.5 rounded-lg border border-[#D8C59B] bg-white text-[#252525] hover:bg-[#FAFAF7] cursor-pointer"
+                      >
+                        ยกเลิก
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Rich Formatting Toolbar */}
                 <div className="px-4 py-2.5 bg-[#F4F2EC]/90 border-b border-[#E5E2DA] flex flex-wrap items-center gap-1">
+                  <button
+                    type="button"
+                    title="เพิ่มหัวข้อวันเดินทาง (Day 1, Day 2, Day 3)"
+                    onClick={handleInsertNextDayHeading}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#DDE8DD]/80 text-[#244B3A] hover:bg-[#DDE8DD] border border-[#C6DAC6] cursor-pointer"
+                  >
+                    <CalendarPlus className="w-3.5 h-3.5" />
+                    <span>+ วัน (Day)</span>
+                  </button>
+                  <button
+                    type="button"
+                    title="แทรกกล่องข้อมูลสถานที่ (ที่ตั้ง เวลาเปิด-ปิด โทร Facebook พิกัด GPS)"
+                    onClick={() => {
+                      setPlaceCardError('');
+                      setShowLinkBox(false);
+                      setShowImageUrlBox(false);
+                      setShowPlaceCardBox((prev) => !prev);
+                    }}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border cursor-pointer ${
+                      showPlaceCardBox
+                        ? 'bg-[#244B3A] border-[#244B3A] text-white'
+                        : 'bg-[#DDE8DD]/80 text-[#244B3A] hover:bg-[#DDE8DD] border-[#C6DAC6]'
+                    }`}
+                  >
+                    <MapPinned className="w-3.5 h-3.5" />
+                    <span>+ กล่องข้อมูลสถานที่</span>
+                  </button>
+
+                  <div className="h-4 w-px bg-[#D8D4C9] mx-1 hidden sm:block" />
+
                   <button
                     type="button"
                     title="หัวข้อหลัก (H2)"
@@ -1044,8 +1266,8 @@ export function ArticleEditor({
                   </button>
                   <button
                     type="button"
-                    title="หัวข้อย่อย (H3)"
-                    onClick={() => insertAtCursor('\n\n### ', '\n', 'หัวข้อย่อย')}
+                    title="ชื่อร้าน / สถานที่ย่อย (H3)"
+                    onClick={() => insertAtCursor('\n\n### ', '\n', 'ชื่อสถานที่ / คาเฟ่')}
                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-[#252525] hover:bg-white border border-transparent hover:border-[#DCD7CB] cursor-pointer"
                   >
                     <Heading3 className="w-3.5 h-3.5" />
@@ -1123,6 +1345,8 @@ export function ArticleEditor({
                     title="แทรกลิงก์ภายนอก"
                     onClick={() => {
                       setLinkError('');
+                      setShowPlaceCardBox(false);
+                      setShowImageUrlBox(false);
                       setShowLinkBox((prev) => !prev);
                     }}
                     className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border cursor-pointer ${
@@ -1147,18 +1371,38 @@ export function ArticleEditor({
 
                   <button
                     type="button"
+                    title="วางลิงก์รูปจาก Cloudinary หรือ URL ภายนอก (วางหลายรูปพร้อมกันได้)"
+                    onClick={() => {
+                      setInlineImageUrlError('');
+                      setShowLinkBox(false);
+                      setShowPlaceCardBox(false);
+                      setShowImageUrlBox((prev) => !prev);
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border cursor-pointer ${
+                      showImageUrlBox
+                        ? 'bg-[#244B3A] text-white border-[#244B3A]'
+                        : 'bg-white text-[#244B3A] border-[#C6DAC6] hover:bg-[#DDE8DD]/50'
+                    }`}
+                  >
+                    <Link2 className="w-3.5 h-3.5" />
+                    <span>แทรกรูปจาก URL</span>
+                  </button>
+
+                  <button
+                    type="button"
                     disabled={uploadingInline}
                     onClick={() => inlineImgInputRef.current?.click()}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#244B3A] text-[#FAFAF7] hover:bg-[#1B3A2C] disabled:opacity-60 cursor-pointer"
                   >
                     <ImagePlus className="w-3.5 h-3.5" />
                     <span>
-                      {uploadingInline ? 'กำลังอัปโหลด...' : 'แทรกรูปภาพในเนื้อหา'}
+                      {uploadingInline ? 'กำลังอัปโหลด...' : 'อัปโหลดรูปแทรกเนื้อหา'}
                     </span>
                   </button>
                   <input
                     ref={inlineImgInputRef}
                     type="file"
+                    multiple
                     accept="image/jpeg,image/png,image/webp,image/gif"
                     className="hidden"
                     onChange={(e) => handleInlineImageUpload(e.target.files)}
@@ -1205,15 +1449,156 @@ export function ArticleEditor({
                   </div>
                 )}
 
+                {/* Inline Multi-URL Image Inserter Popover */}
+                {showImageUrlBox && (
+                  <div className="px-4 py-3.5 bg-[#DDE8DD]/40 border-b border-[#D3DED3] space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-[#244B3A]">
+                        วางลิงก์รูปภาพ (Cloudinary / ImgBB) — วางหลายลิงก์ขึ้นบรรทัดใหม่ทีละรูป ระบบจะจัดเป็นกริด 2 คอลัมน์อัตโนมัติ
+                      </p>
+                      <button
+                        type="button"
+                        aria-label="ปิดหน้าต่างแทรกรูปจาก URL"
+                        onClick={() => setShowImageUrlBox(false)}
+                        className="p-1 rounded-lg text-[#5C615C] hover:bg-white cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={inlineImageUrlsText}
+                      onChange={(e) => {
+                        setInlineImageUrlsText(e.target.value);
+                        if (inlineImageUrlError) setInlineImageUrlError('');
+                      }}
+                      placeholder={`https://res.cloudinary.com/.../photo1.jpg\nhttps://res.cloudinary.com/.../photo2.jpg`}
+                      className="w-full px-3 py-2 rounded-lg bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A] resize-y"
+                    />
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                      <input
+                        type="text"
+                        value={inlineImageCaption}
+                        onChange={(e) => setInlineImageCaption(e.target.value)}
+                        placeholder="คำบรรยายภาพ (ไม่บังคับ)"
+                        className="flex-1 px-3 py-1.5 rounded-lg bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleConfirmInsertImageUrls}
+                        className="px-4 py-1.5 rounded-lg bg-[#244B3A] text-white text-xs font-medium hover:bg-[#1B3A2C] cursor-pointer whitespace-nowrap"
+                      >
+                        แทรกรูปลงเนื้อหา
+                      </button>
+                    </div>
+                    {inlineImageUrlError && (
+                      <p className="text-xs text-[#B82860]">{inlineImageUrlError}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Structured Place Info Card Builder Popover */}
+                {showPlaceCardBox && (
+                  <div className="px-4 py-4 bg-[#F7F5EF] border-b border-[#DFDBD0] space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-[#244B3A]">
+                        <MapPinned className="w-4 h-4" />
+                        <span>เพิ่มกล่องข้อมูลสถานที่ (ร้านอาหาร / คาเฟ่ / วัด / ที่พัก / พิกัด GPS)</span>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="ปิดหน้าต่างกล่องข้อมูลสถานที่"
+                        onClick={() => setShowPlaceCardBox(false)}
+                        className="p-1 rounded-lg text-[#5C615C] hover:bg-white cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <input
+                        type="text"
+                        value={placeCardName}
+                        onChange={(e) => {
+                          setPlaceCardName(e.target.value);
+                          if (placeCardError) setPlaceCardError('');
+                        }}
+                        placeholder="ชื่อสถานที่ * (เช่น Building A Cafe / วัดเจดีย์หลวงฯ)"
+                        className="px-3 py-2 rounded-lg bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                      />
+                      <input
+                        type="text"
+                        value={placeCardHours}
+                        onChange={(e) => setPlaceCardHours(e.target.value)}
+                        placeholder="เวลาเปิด-ปิด (เช่น 09.00 - 18.00 น. ปิดวันจันทร์)"
+                        className="px-3 py-2 rounded-lg bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                      />
+                      <input
+                        type="text"
+                        value={placeCardAddress}
+                        onChange={(e) => setPlaceCardAddress(e.target.value)}
+                        placeholder="ที่ตั้ง (เช่น ถ.เจริญเมือง สันป่าข่อย เชียงใหม่)"
+                        className="sm:col-span-2 px-3 py-2 rounded-lg bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                      />
+                      <input
+                        type="text"
+                        value={placeCardPhone}
+                        onChange={(e) => setPlaceCardPhone(e.target.value)}
+                        placeholder="โทรศัพท์ (เช่น 087-788-3313)"
+                        className="px-3 py-2 rounded-lg bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                      />
+                      <input
+                        type="text"
+                        value={placeCardFee}
+                        onChange={(e) => setPlaceCardFee(e.target.value)}
+                        placeholder="ค่าเข้าชม (ไม่บังคับ เช่น 60 บาท)"
+                        className="px-3 py-2 rounded-lg bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                      />
+                      <input
+                        type="text"
+                        value={placeCardSocial}
+                        onChange={(e) => setPlaceCardSocial(e.target.value)}
+                        placeholder="Facebook / เว็บไซต์ (ชื่อเพจหรือ https://...)"
+                        className="px-3 py-2 rounded-lg bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                      />
+                      <input
+                        type="url"
+                        value={placeCardMaps}
+                        onChange={(e) => {
+                          setPlaceCardMaps(e.target.value);
+                          if (placeCardError) setPlaceCardError('');
+                        }}
+                        placeholder="พิกัด GPS (เช่น https://goo.gl/maps/...)"
+                        className="px-3 py-2 rounded-lg bg-white border border-[#DCD7CB] text-xs text-[#252525] focus:outline-none focus:border-[#244B3A]"
+                      />
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      {placeCardError ? (
+                        <p className="text-xs text-[#B82860]">{placeCardError}</p>
+                      ) : (
+                        <span className="text-[11px] text-[#7D827D]">
+                          แสดงเป็นการ์ดข้อมูลสถานที่พร้อมปุ่มเปิดนำทาง Google Maps ในบทความ
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleConfirmInsertPlaceCard}
+                        className="px-4 py-1.5 rounded-lg bg-[#244B3A] text-white text-xs font-medium hover:bg-[#1B3A2C] cursor-pointer whitespace-nowrap"
+                      >
+                        แทรกกล่องข้อมูลสถานที่
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="p-5">
                   <textarea
                     ref={textareaRef}
-                    rows={16}
+                    rows={18}
                     required
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
-                    placeholder={`เล่าเรื่องราวการเดินทางของคุณที่นี่...\n\n## ช่วงเวลาประทับใจ\nบรรยายบรรยากาศ เส้นทาง หรือความรู้สึกที่อยากแบ่งปัน\n\nสามารถกดปุ่ม "แทรกรูปภาพในเนื้อหา" ด้านบนเพื่ออัปโหลดภาพประกอบและใส่คำบรรยายภาพระหว่างย่อหน้าได้`}
-                    className="w-full min-h-[360px] text-sm sm:text-[15px] leading-relaxed text-[#252525] bg-transparent focus:outline-none resize-y"
+                    placeholder={`เล่าเรื่องราวการเดินทางของคุณที่นี่...\n\n## Day 1 : เริ่มต้นทริป\n### ชื่อคาเฟ่หรือจุดเช็คอิน\nบรรยายบรรยากาศ เส้นทาง หรือความรู้สึกที่อยากแบ่งปัน\n\nกดปุ่ม "+ กล่องข้อมูลสถานที่" เพื่อแทรกที่ตั้ง เวลาเปิด-ปิด โทรศัพท์ และพิกัด GPS หรือกด "แทรกรูปจาก URL" เพื่อวางรูปหลายใบจัดเป็นกริดอัตโนมัติ`}
+                    className="w-full min-h-[380px] text-sm sm:text-[15px] leading-relaxed text-[#252525] bg-transparent focus:outline-none resize-y"
                   />
                 </div>
               </section>

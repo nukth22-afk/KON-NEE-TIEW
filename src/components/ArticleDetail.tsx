@@ -242,13 +242,26 @@ export function ArticleDetail({
         });
       }
     }
-    const inlineRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
-    let m: RegExpExecArray | null;
-    while ((m = inlineRegex.exec(article.content)) !== null) {
-      const caption = m[1].trim();
-      const url = m[2].trim();
-      if (url && !map.has(url)) {
-        map.set(url, { url, caption: caption || article.place_name });
+    for (const rawLine of article.content.split('\n')) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const mdMatch = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(line);
+      if (mdMatch) {
+        const caption = mdMatch[1].trim();
+        const url = mdMatch[2].trim();
+        if (url && !map.has(url)) {
+          map.set(url, { url, caption: caption || article.place_name });
+        }
+        continue;
+      }
+      if (
+        /^https?:\/\/\S+$/i.test(line) &&
+        (/\.(jpg|jpeg|png|webp|gif|avif)(\?.*)?$/i.test(line) ||
+          line.includes('res.cloudinary.com/'))
+      ) {
+        if (!map.has(line)) {
+          map.set(line, { url: line, caption: article.place_name });
+        }
       }
     }
     return Array.from(map.values());

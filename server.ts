@@ -195,7 +195,9 @@ function validateArticleBody(body: unknown): {
   const autoExcerpt =
     excerpt ||
     content
+      .replace(/:::place[\s\S]*?:::/g, '')
       .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+      .replace(/https?:\/\/\S+/g, '')
       .replace(/^[#>\-*0-9.]+\s*/gm, '')
       .replace(/[*_~]/g, '')
       .replace(/\s+/g, ' ')
